@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "go1265",
+  "project_id": "hwj-gowork-0101",
+  "go_toolchain": "go1.26.5",
+  "go_language_version": "1.21",
+  "gotoolchain": "local",
+  "docker_base_tag": "golang:1.26.5-bookworm",
+  "docker_base_digest": "golang@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd",
+  "required_platforms": ["linux/amd64", "linux/arm64"],
+  "delivery_go_version": "Go toolchain: go1.26.5 linux/amd64 + linux/arm64; go.mod language version: go 1.21; GOTOOLCHAIN=local"
+}

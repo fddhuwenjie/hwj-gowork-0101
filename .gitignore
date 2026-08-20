@@ -1,0 +1,7 @@
+# 版本控制忽略
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.DS_Store
