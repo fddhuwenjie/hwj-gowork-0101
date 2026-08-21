@@ -62,7 +62,7 @@ func (r *AuditRepo) List(ctx context.Context, f domain.AuditFilter, p domain.Pag
 	sortCol := map[string]string{"id": "id", "created_at": "created_at", "entity": "entity"}[p.Sort]
 	query := fmt.Sprintf(
 		`SELECT id, entity, entity_id, action, actor, detail, created_at FROM audit_events
-		 WHERE %s ORDER BY %s %s, id ASC LIMIT ? OFFSET ?`, cond, sortCol, p.Order)
+		 WHERE %s ORDER BY %s %s, id DESC LIMIT ? OFFSET ?`, cond, sortCol, p.Order)
 	rows, err := r.db.QueryContext(ctx, query, append(args, p.PageSize, p.Offset())...)
 	if err != nil {
 		return domain.Page[domain.AuditEvent]{}, err

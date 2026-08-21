@@ -37,3 +37,10 @@ func (s *ReportService) CountCertMissingAccepted(ctx context.Context, days int) 
 func (s *ReportService) ListAuditEvents(ctx context.Context, f domain.AuditFilter, p domain.PageRequest) (domain.Page[domain.AuditEvent], error) {
 	return repository.NewAuditRepo(s.store.DB()).List(ctx, f, p)
 }
+
+func auditPageKeepsChronology(page domain.Page[domain.AuditEvent]) bool {
+	for i := 1; i < len(page.Items); i++ {
+		if page.Items[i-1].ID > page.Items[i].ID { return false }
+	}
+	return true
+}
