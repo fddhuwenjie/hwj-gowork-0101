@@ -196,3 +196,26 @@ func (e *testEnv) getLot(t *testing.T, id int64) *domain.MaterialLot {
 	}
 	return lot
 }
+
+// insertRawSpectrumReport 直接经仓库插入一份光谱报告，绕过服务层校验，
+// 用于构造同批次多样本/报告提交时序等场景下的证据源，供复核流程测试使用。
+func (e *testEnv) insertRawSpectrumReport(t *testing.T, sampleID int64, reportNo string, inRange bool, ruleID int64) {
+	t.Helper()
+	readings := inRangeReadings()
+	if !inRange {
+		readings = outOfRangeReadings()
+	}
+	rep := &domain.SpectrumReport{
+		ReportNo: reportNo, SampleID: sampleID, RuleID: ruleID,
+		Readings:   readings,
+		Violations: domain.CheckReadingsInRange(testElements, readings),
+		Conclusion: domain.SpectrumInRange,
+		Analyzer:   "tester",
+	}
+	if !inRange {
+		rep.Conclusion = domain.SpectrumOutOfRange
+	}
+	if err := repository.NewSpectrumRepo(e.db).Insert(e.ctx, rep); err != nil {
+		t.Fatalf("插入原始光谱报告失败: %v", err)
+	}
+}

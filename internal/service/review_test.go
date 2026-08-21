@@ -186,6 +186,100 @@ func TestConcludeRetest_MustMatchSpectrum(t *testing.T) {
 	}
 }
 
+// TestConcludeRetest_OnlyRetainedSampleReportPass 复验结论只依据申请所指向留样的报告，
+// 不受同批次其他样本的报告影响：留样复验合格时即便他样存在更新的不合格报告，
+// 复验结论 pass 也应被接受（覆盖初检 fail）。
+func TestConcludeRetest_OnlyRetainedSampleReportPass(t *testing.T) {
+	env := newTestEnv(t)
+	lot, samples, _ := env.mustJudgedLot(t, "L-RTSO", false) // 初检 fail
+	retained := samples[0]                                    // 留样，初检超范围
+
+	task := &domain.RetestTask{LotID: lot.ID, SampleID: retained.ID, Reason: "异议", RequestedBy: "requester"}
+	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 留样复验报告：范围内（pass）
+	rep := &domain.SpectrumReport{
+		ReportNo: "R-RTSO-RETEST", SampleID: retained.ID,
+		Readings: inRangeReadings(), Analyzer: "tester2",
+	}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, rep, "tester2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同批次另一样本存在一份更新的不合格报告：留样本身的复验报告为 pass，
+	// 结论不应被该样本报告否决（旧实现取整批最新报告会误判为 fail）。
+	env.insertRawSpectrumReport(t, samples[1].ID, "R-RTSO-OTHER", false, rep.RuleID)
+
+	// 结论 pass 与留样复验报告一致，可覆盖初检 fail（需共同决定人）
+	conclusion, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultPass, "judge2", "co-judge", "留样复验合格")
+	if err != nil {
+		t.Fatalf("留样复验合格却仍被按他样旧结果拒绝: %v", err)
+	}
+	if conclusion.Result != domain.ResultPass || !conclusion.OverridesPrev || !conclusion.SpectrumOK {
+		t.Fatalf("复验结论应为 pass 且覆盖初检: %+v", conclusion)
+	}
+	lot = env.getLot(t, lot.ID)
+	if lot.Status != domain.LotStatusJudged || lot.RetestResult != "pass" || lot.FinalResult() != "pass" {
+		t.Fatalf("复验结论落库不符: %+v", lot)
+	}
+}
+
+// TestConcludeRetest_RetainedSampleFail_StaysFail 留样复验仍超范围时，
+// 复验结论必须为 fail（维持初检不合格），即便同批次其他样本存在更新的合格报告，
+// 也不得以他样报告放行 pass（旧实现会误取整批最新报告而放行）。
+func TestConcludeRetest_RetainedSampleFail_StaysFail(t *testing.T) {
+	env := newTestEnv(t)
+	lot, samples, _ := env.mustJudgedLot(t, "L-RTSF", false) // 初检 fail
+	retained := samples[0]                                    // 留样，初检超范围
+
+	task := &domain.RetestTask{LotID: lot.ID, SampleID: retained.ID, Reason: "异议", RequestedBy: "requester"}
+	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 留样复验报告仍超范围（fail）
+	rep := &domain.SpectrumReport{
+		ReportNo: "R-RTSF-RETEST", SampleID: retained.ID,
+		Readings: outOfRangeReadings(), Analyzer: "tester2",
+	}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, rep, "tester2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同批次另一样本存在一份更新的合格报告，不得据此放行 pass
+	env.insertRawSpectrumReport(t, samples[1].ID, "R-RTSF-OTHER", true, rep.RuleID)
+
+	// 宣称 pass 与留样证据矛盾 → 违反 R05
+	_, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultPass, "judge2", "co", "")
+	if err == nil {
+		t.Fatalf("留样仍超范围，宣称 pass 应被拒绝，却被放行")
+	}
+	if de := domain.AsDomain(err); de.Code != domain.ErrCodeRuleViolation || de.Rule != domain.RuleSpectrumWithinGradeRange {
+		t.Fatalf("留样仍超范围却宣称 pass 应违反 R05, 实际 %v", err)
+	}
+
+	// fail 与初检一致，非覆盖，无需共同决定人 → 复验以不合格结束
+	conclusion, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultFail, "judge2", "", "维持原判")
+	if err != nil {
+		t.Fatalf("留样仍超范围，复验应维持 fail: %v", err)
+	}
+	if conclusion.Result != domain.ResultFail || conclusion.OverridesPrev {
+		t.Fatalf("复验结论应为 fail 且不覆盖: %+v", conclusion)
+	}
+	lot = env.getLot(t, lot.ID)
+	if lot.Status != domain.LotStatusJudged || lot.RetestResult != "fail" || lot.FinalResult() != "fail" {
+		t.Fatalf("复验不合格后批次应维持 judged/fail: %+v", lot)
+	}
+}
+
 // TestRejectRetest 驳回复验申请后批次回到 judged。
 func TestRejectRetest(t *testing.T) {
 	env := newTestEnv(t)
