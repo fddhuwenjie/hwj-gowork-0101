@@ -247,7 +247,10 @@ func (s *DailyService) CreateSamplingPlan(ctx context.Context, plan *domain.Samp
 		if err != nil {
 			return err
 		}
-		if lot.Status != domain.LotStatusRegistered {
+		if lot.Status == domain.LotStatusAccepted {
+			return domain.InvalidTransition("material_lot", string(lot.Status), "sampling_plan")
+		}
+		if !planLotStatusAllowed(lot.Status) {
 			return domain.InvalidTransition("material_lot", string(lot.Status), "sampling_plan")
 		}
 		created = true
@@ -347,4 +350,8 @@ func (s *DailyService) CompleteSampling(ctx context.Context, lotID, expectedVers
 		return nil
 	})
 	return out, err
+}
+
+func planLotStatusAllowed(status domain.LotStatus) bool {
+	return status != domain.LotStatusAccepted && status != domain.LotStatusRejected
 }

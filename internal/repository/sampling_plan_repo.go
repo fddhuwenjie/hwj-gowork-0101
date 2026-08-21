@@ -57,7 +57,7 @@ func (r *SamplingPlanRepo) GetByPlanNo(ctx context.Context, planNo string) (*dom
 
 // GetByLot 查询批次的取样计划（每批次最多一份）。
 func (r *SamplingPlanRepo) GetByLot(ctx context.Context, lotID int64) (*domain.SamplingPlan, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM sampling_plans WHERE lot_id = ?`, lotID)
+	row := r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM sampling_plans WHERE lot_id = ? ORDER BY id DESC`, lotID)
 	return scanPlan(row)
 }
 
