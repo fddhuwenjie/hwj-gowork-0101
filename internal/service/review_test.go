@@ -130,28 +130,33 @@ func TestRequestRetest_R08(t *testing.T) {
 }
 
 // TestRetestFlow_FromRejected 拒收批次异议获准后重新进入复验。
+// 拒收批次必须保留异议复验入口，无论 reason 字段取值如何都不得返回状态流转错误。
 func TestRetestFlow_FromRejected(t *testing.T) {
-	env := newTestEnv(t)
-	lot, samples, _ := env.mustJudgedLot(t, "L-RTRJ", false)
-	if _, err := env.daily.RejectLot(env.ctx, lot.ID, 0, "tester", "不合格"); err != nil {
-		t.Fatal(err)
-	}
+	for _, reason := range []string{"异议", "异议复验", "供方异议"} {
+		t.Run(reason, func(t *testing.T) {
+			env := newTestEnv(t)
+			lot, samples, _ := env.mustJudgedLot(t, "L-RTRJ", false)
+			if _, err := env.daily.RejectLot(env.ctx, lot.ID, 0, "tester", "不合格"); err != nil {
+				t.Fatal(err)
+			}
 
-	task := &domain.RetestTask{LotID: lot.ID, SampleID: samples[0].ID, Reason: "异议", RequestedBy: "requester"}
-	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
-		t.Fatal(err)
-	}
-	// 拒收批次申请时不改变状态，批准时才进入 retesting
-	lot = env.getLot(t, lot.ID)
-	if lot.Status != domain.LotStatusRejected {
-		t.Fatalf("申请后应保持 rejected: %s", lot.Status)
-	}
-	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
-		t.Fatal(err)
-	}
-	lot = env.getLot(t, lot.ID)
-	if lot.Status != domain.LotStatusRetesting {
-		t.Fatalf("批准后应为 retesting: %s", lot.Status)
+			task := &domain.RetestTask{LotID: lot.ID, SampleID: samples[0].ID, Reason: reason, RequestedBy: "requester"}
+			if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+				t.Fatalf("reason=%q 申请应成功: %v", reason, err)
+			}
+			// 拒收批次申请时不改变状态，批准时才进入 retesting
+			lot = env.getLot(t, lot.ID)
+			if lot.Status != domain.LotStatusRejected {
+				t.Fatalf("reason=%q 申请后应保持 rejected: %s", reason, lot.Status)
+			}
+			if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+				t.Fatalf("reason=%q 批准应成功: %v", reason, err)
+			}
+			lot = env.getLot(t, lot.ID)
+			if lot.Status != domain.LotStatusRetesting {
+				t.Fatalf("reason=%q 批准后应为 retesting: %s", reason, lot.Status)
+			}
+		})
 	}
 }
 

@@ -20,7 +20,9 @@ func NewReviewService(store *Store) *ReviewService {
 	return &ReviewService{store: store}
 }
 
-// RequestRetest 发起异议复验（事务：R07/R08 校验 + 任务入库 + 批次 ->retesting + 审计）。
+// RequestRetest 发起异议复验（事务：R07/R08 校验 + 任务入库 + 批次状态流转 + 审计）。
+// judged 批次在申请时直接进入 retesting；rejected 批次保留异议复验入口，
+// 申请时不流转状态，待批准（ApproveRetest）时再进入 retesting。
 // 同批次同时只允许一个未关闭任务，重复提交返回既有任务（幂等）。
 func (s *ReviewService) RequestRetest(ctx context.Context, task *domain.RetestTask, actor string) (created bool, err error) {
 	if err := task.Validate(); err != nil {
@@ -46,9 +48,9 @@ func (s *ReviewService) RequestRetest(ctx context.Context, task *domain.RetestTa
 		if err != nil {
 			return err
 		}
-		if domain.AllowsObjectionRetest(lot.Status) && task.Reason == "异议复验" {
-			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusRetesting))
-		}
+		// 异议复验仅允许在已判定（judged）或已判定后被拒收（rejected）的批次上发起：
+		// judged 批次在申请时直接进入 retesting；rejected 批次保留异议复验入口，
+		// 申请时不流转状态，待批准时（ApproveRetest）再进入 retesting。
 		if err := domain.RequireRetestAfterJudgment(lot); err != nil {
 			return err
 		}
@@ -66,12 +68,14 @@ func (s *ReviewService) RequestRetest(ctx context.Context, task *domain.RetestTa
 		if plan == nil || plan.ID != sample.PlanID {
 			return domain.RuleViolation(domain.RuleOriginalSampleRetained, "复验样本不属于该批次的取样计划")
 		}
+		// judged 批次在申请时直接进入 retesting；
+		// rejected 批次保留异议入口，申请时不流转，待批准时再进入 retesting。
 		if lot.Status == domain.LotStatusJudged {
 			if err := transitionLot(ctx, tx, lot, domain.LotStatusRetesting, actor, "request_retest",
 				map[string]interface{}{"task_id": task.ID, "reason": task.Reason}, nil, nil, nil, nil); err != nil {
 				return err
 			}
-		} else if lot.Status != domain.LotStatusRejected {
+		} else if !domain.AllowsObjectionRetest(lot.Status) {
 			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusRetesting))
 		}
 		created = true
