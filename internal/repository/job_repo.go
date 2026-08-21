@@ -102,6 +102,24 @@ func (r *JobRepo) PickDue(ctx context.Context, now time.Time) (*domain.Backgroun
 }
 
 // MarkDone 标记任务完成。
+func (r *JobRepo) MarkDoneForAttempt(ctx context.Context, id, expectedVersion int64) error {
+	job, err := r.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if job == nil || job.Status != domain.JobStatusRunning {
+		return nil
+	}
+	if job.Attempts >= job.MaxAttempts {
+		return nil
+	}
+	_, err = r.db.ExecContext(ctx,
+		`UPDATE background_jobs SET status = 'done', last_error = '', updated_at = ?, version = version + 1 WHERE id = ? AND status = 'running' AND version = ?`,
+		timeToDB(nowUTC()), id, expectedVersion)
+	return err
+}
+
+// MarkDone remains available to the scheduler's legacy completion path.
 func (r *JobRepo) MarkDone(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE background_jobs SET status = 'done', last_error = '', updated_at = ?, version = version + 1 WHERE id = ?`,

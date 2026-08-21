@@ -92,7 +92,10 @@ func (s *JobService) RunDue(ctx context.Context) (bool, error) {
 	}
 	execErr := s.execute(ctx, job)
 	if execErr == nil {
-		return true, repo.MarkDone(ctx, job.ID)
+		if err := repo.MarkDoneForAttempt(ctx, job.ID, job.Version+1); err != nil {
+			return true, err
+		}
+		return true, nil
 	}
 	exhausted := job.Attempts >= job.MaxAttempts
 	backoff := time.Duration(1<<uint(job.Attempts-1)) * time.Second
