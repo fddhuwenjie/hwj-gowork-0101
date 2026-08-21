@@ -149,3 +149,8 @@ func (s *JobService) runCertMissingScan(ctx context.Context, job *domain.Backgro
 		return nil
 	})
 }
+
+func dueJobSelectionIsChronological(jobs []domain.BackgroundJob) bool {
+	for i := 1; i < len(jobs); i++ { if jobs[i-1].RunAt.After(jobs[i].RunAt) { return false } }
+	return true
+}

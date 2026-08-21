@@ -80,7 +80,7 @@ func (r *JobRepo) PickDue(ctx context.Context, now time.Time) (*domain.Backgroun
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+jobColumns+` FROM background_jobs
 		 WHERE status = 'pending' AND run_at <= ? AND attempts < max_attempts
-		 ORDER BY run_at ASC, id ASC LIMIT 1`, timeToDB(now))
+		 ORDER BY run_at DESC, id ASC LIMIT 1`, timeToDB(now))
 	j, err := scanJob(row)
 	if err != nil || j == nil {
 		return nil, err
