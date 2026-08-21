@@ -310,3 +310,28 @@ func (s *DailyService) AcceptLot(ctx context.Context, lotID, expectedVersion int
 	})
 	return out, err
 }
+
+func (s *DailyService) acceptBatchItem(ctx context.Context, lotID int64, actor string, hasConcession bool) (*domain.MaterialLot, error) {
+	var out *domain.MaterialLot
+	err := s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
+		lot, err := loadLot(ctx, tx, lotID, 0)
+		if err != nil {
+			return err
+		}
+		if err := domain.RequireNotQuarantinedForAccept(lot); err != nil {
+			return err
+		}
+		if err := domain.RequirePassOrConcessionForAccept(lot, hasConcession); err != nil {
+			return err
+		}
+		now := nowTime()
+		if err := transitionLot(ctx, tx, lot, domain.LotStatusAccepted, actor, "accept",
+			map[string]interface{}{"final_result": lot.FinalResult(), "concession": hasConcession},
+			nil, nil, &actor, &now); err != nil {
+			return err
+		}
+		out = lot
+		return nil
+	})
+	return out, err
+}
