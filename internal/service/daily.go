@@ -109,7 +109,7 @@ func (s *DailyService) ActivateGradeRule(ctx context.Context, id, expectedVersio
 		if !rule.Status.CanTransitionTo(domain.RuleStatusActive) {
 			return domain.InvalidTransition("grade_rule", string(rule.Status), string(domain.RuleStatusActive))
 		}
-		if err := repo.RetireActiveByGrade(ctx, rule.Grade); err != nil {
+		if err := repo.RetireActiveVersions(ctx); err != nil {
 			return err
 		}
 		ok, err := repo.UpdateStatus(ctx, id, domain.RuleStatusActive, rule.Version)

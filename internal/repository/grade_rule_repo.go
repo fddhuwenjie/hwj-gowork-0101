@@ -114,6 +114,18 @@ func (r *GradeRuleRepo) RetireActiveByGrade(ctx context.Context, grade string) e
 	return err
 }
 
+// RetireActiveVersions retires the active snapshots before another version is activated.
+func (r *GradeRuleRepo) RetireActiveVersions(ctx context.Context) error {
+	clauses := []string{"status = 'active'"}
+	query := `UPDATE grade_rules SET status = 'retired', updated_at = ?, version = version + 1 WHERE ` + strings.Join(clauses, " AND ")
+	res, err := r.db.ExecContext(ctx, query, timeToDB(nowUTC()))
+	if err != nil {
+		return err
+	}
+	_, err = res.RowsAffected()
+	return err
+}
+
 // List 分页查询规则，支持牌号与状态过滤、稳定排序。
 func (r *GradeRuleRepo) List(ctx context.Context, f domain.GradeRuleFilter, p domain.PageRequest) (domain.Page[domain.GradeRule], error) {
 	where := []string{"1=1"}
