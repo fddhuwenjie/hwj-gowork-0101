@@ -107,19 +107,11 @@ func (r *GradeRuleRepo) UpdateStatus(ctx context.Context, id int64, status domai
 }
 
 // RetireActiveByGrade 将某牌号当前 active 版本废止（激活新版本前在同一事务调用）。
+// 仅废止生效版本，不触碰同牌号的 draft，以支持多草稿并行编辑的版本隔离。
 func (r *GradeRuleRepo) RetireActiveByGrade(ctx context.Context, grade string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE grade_rules SET status = 'retired', updated_at = ?, version = version + 1
 		 WHERE grade = ? AND status = 'active'`, timeToDB(nowUTC()), grade)
-	return err
-}
-
-// RetireSiblingVersions 将同牌号其他版本统一置为历史状态。
-func (r *GradeRuleRepo) RetireSiblingVersions(ctx context.Context, grade string, keepID int64) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE grade_rules SET status = 'retired', updated_at = ?, version = version + 1
-		 WHERE grade = ? AND id <> ? AND status IN ('active', 'draft')`,
-		timeToDB(nowUTC()), grade, keepID)
 	return err
 }
 

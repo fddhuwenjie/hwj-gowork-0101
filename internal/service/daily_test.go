@@ -412,6 +412,68 @@ func TestActivateGradeRule_VersionConflict(t *testing.T) {
 	}
 }
 
+// TestActivateGradeRule_MultiDraftIsolation 验证多草稿并行编辑时的版本隔离：
+// 同一牌号存在两个 draft，发布其一后，另一个仍保持 draft 且可继续发布，
+// 且原先 active 的版本被废止而非其他草稿。
+func TestActivateGradeRule_MultiDraftIsolation(t *testing.T) {
+	env := newTestEnv(t)
+	// newTestEnv 已为 "304" 建立 active 的 V1（见 mustActiveGradeRule）。
+	repo := repository.NewGradeRuleRepo(env.db)
+
+	// 两份并行编辑的草稿 V2、V3
+	ruleV2 := &domain.GradeRule{Grade: "304", VersionNo: 2, Elements: testElements}
+	ruleV3 := &domain.GradeRule{Grade: "304", VersionNo: 3, Elements: testElements}
+	if _, err := env.daily.CreateGradeRule(env.ctx, ruleV2, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.daily.CreateGradeRule(env.ctx, ruleV3, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if ruleV2.Status != domain.RuleStatusDraft || ruleV3.Status != domain.RuleStatusDraft {
+		t.Fatalf("新建草稿应为 draft: V2=%s V3=%s", ruleV2.Status, ruleV3.Status)
+	}
+
+	// 发布 V2：只应废止原 active(V1)，V3 保持 draft。
+	if _, err := env.daily.ActivateGradeRule(env.ctx, ruleV2.ID, ruleV2.Version, "tester"); err != nil {
+		t.Fatalf("发布 V2 失败: %v", err)
+	}
+
+	v1, _ := repo.GetByGradeVersion(env.ctx, "304", 1)
+	if v1 == nil || v1.Status != domain.RuleStatusRetired {
+		t.Fatalf("原 active(V1) 应被废止: %+v", v1)
+	}
+	v2, _ := repo.GetByGradeVersion(env.ctx, "304", 2)
+	if v2 == nil || v2.Status != domain.RuleStatusActive {
+		t.Fatalf("V2 应为 active: %+v", v2)
+	}
+	// 关键断言：未发布的 V3 不得被牵连废止。
+	v3, _ := repo.GetByGradeVersion(env.ctx, "304", 3)
+	if v3 == nil {
+		t.Fatal("并行草稿 V3 不应消失")
+	}
+	if v3.Status != domain.RuleStatusDraft {
+		t.Fatalf("并行草稿 V3 应保持 draft，实际 %s", v3.Status)
+	}
+
+	// 之后仍可发布 V3，并替换 V2。
+	if _, err := env.daily.ActivateGradeRule(env.ctx, ruleV3.ID, ruleV3.Version, "tester"); err != nil {
+		t.Fatalf("发布 V3 应成功: %v", err)
+	}
+	v2After, _ := repo.GetByGradeVersion(env.ctx, "304", 2)
+	if v2After == nil || v2After.Status != domain.RuleStatusRetired {
+		t.Fatalf("V3 发布后 V2 应被废止: %+v", v2After)
+	}
+	v3After, _ := repo.GetByGradeVersion(env.ctx, "304", 3)
+	if v3After == nil || v3After.Status != domain.RuleStatusActive {
+		t.Fatalf("V3 应为 active: %+v", v3After)
+	}
+	// 整个牌号最终仍只有一个 active。
+	active, err := repo.GetActiveByGrade(env.ctx, "304")
+	if err != nil || active == nil || active.VersionNo != 3 {
+		t.Fatalf("牌号 304 应仅有 V3 active: %+v err=%v", active, err)
+	}
+}
+
 // TestServiceReopenPersistence 关闭重开后服务层数据仍在。
 func TestServiceReopenPersistence(t *testing.T) {
 	ctx := context.Background()

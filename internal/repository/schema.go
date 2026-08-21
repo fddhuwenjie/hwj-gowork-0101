@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS grade_rules (
     UNIQUE (grade, version_no)
 );
 CREATE INDEX IF NOT EXISTS idx_grade_rules_grade ON grade_rules (grade, status);
+-- 同一牌号同一时刻最多一个 active 版本：发布新版本前原 active 被废止，
+-- 此约束在事务层之上为多草稿并行发布提供兜底，防止并发产生两个 active。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_grade_rules_active ON grade_rules (grade) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS material_lots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,

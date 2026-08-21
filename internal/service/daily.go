@@ -90,7 +90,8 @@ func (s *DailyService) ListGradeRules(ctx context.Context, f domain.GradeRuleFil
 	return repository.NewGradeRuleRepo(s.store.DB()).List(ctx, f, p)
 }
 
-// ActivateGradeRule 激活规则版本：draft->active，同事务废止同牌号旧 active 版本。
+// ActivateGradeRule 激活规则版本：draft->active，同事务废止同牌号原 active 版本。
+// 发布只替换原先生效的版本，不动其他 draft，以支持多草稿并行编辑的版本隔离。
 // 激活使新版本立即成为判定依据，属于复核归档流程与日常流程的共享制约点。
 func (s *DailyService) ActivateGradeRule(ctx context.Context, id, expectedVersion int64, actor string) (*domain.GradeRule, error) {
 	var out *domain.GradeRule
@@ -109,7 +110,9 @@ func (s *DailyService) ActivateGradeRule(ctx context.Context, id, expectedVersio
 		if !rule.Status.CanTransitionTo(domain.RuleStatusActive) {
 			return domain.InvalidTransition("grade_rule", string(rule.Status), string(domain.RuleStatusActive))
 		}
-		if err := repo.RetireSiblingVersions(ctx, rule.Grade, rule.ID); err != nil {
+		// 发布只替换原先生效的版本；同牌号其他 draft 保持可编辑/可发布，
+		// 以支持多草稿并行编辑时的版本隔离。
+		if err := repo.RetireActiveByGrade(ctx, rule.Grade); err != nil {
 			return err
 		}
 		ok, err := repo.UpdateStatus(ctx, id, domain.RuleStatusActive, rule.Version)
@@ -340,7 +343,7 @@ func (s *DailyService) CompleteSampling(ctx context.Context, lotID, expectedVers
 			return domain.VersionConflict("sampling_plan", plan.ID, plan.Version, -1)
 		}
 		if err := transitionLot(ctx, tx, lot, domain.LotStatusSampled, actor, "complete_sampling",
-			map[string]interface{}{ "plan_no": plan.PlanNo, "samples": count }, nil, nil, nil, nil); err != nil {
+			map[string]interface{}{"plan_no": plan.PlanNo, "samples": count}, nil, nil, nil, nil); err != nil {
 			return err
 		}
 		out = lot
