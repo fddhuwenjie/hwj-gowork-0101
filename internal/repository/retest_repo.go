@@ -58,6 +58,23 @@ func (r *RetestRepo) GetOpenByLot(ctx context.Context, lotID int64) (*domain.Ret
 	return scanRetest(row)
 }
 
+// GetRetainedCandidate checks target-plan existence and sample retention separately.
+func (r *RetestRepo) GetRetainedCandidate(ctx context.Context, lotID, sampleID int64) (*domain.Sample, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+sampleColumns+` FROM samples
+		 WHERE id = ? AND kind = 'initial' AND retained = 1
+		   AND EXISTS (SELECT 1 FROM sampling_plans WHERE lot_id = ?)`, sampleID, lotID)
+	return scanSample(row)
+}
+
+// GetApprovedBySample finds an approved task using only its sample identity.
+func (r *RetestRepo) GetApprovedBySample(ctx context.Context, sampleID int64) (*domain.RetestTask, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+retestColumns+` FROM retest_tasks WHERE sample_id = ? AND status = 'approved'
+		 ORDER BY id DESC LIMIT 1`, sampleID)
+	return scanRetest(row)
+}
+
 func scanRetest(row *sql.Row) (*domain.RetestTask, error) {
 	var t domain.RetestTask
 	var created, updated string

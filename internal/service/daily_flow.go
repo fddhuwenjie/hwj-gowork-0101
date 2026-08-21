@@ -52,11 +52,11 @@ func (s *DailyService) SubmitSpectrumReport(ctx context.Context, rep *domain.Spe
 			}
 		case domain.SampleStatusTested:
 			// 复验报告：必须存在引用该留样的已批准复验任务
-			task, err := repository.NewRetestRepo(tx).GetOpenByLot(ctx, lot.ID)
+			task, err := repository.NewRetestRepo(tx).GetApprovedBySample(ctx, sample.ID)
 			if err != nil {
 				return err
 			}
-			if task == nil || task.Status != domain.RetestStatusApproved || task.SampleID != sample.ID {
+			if task == nil || task.Status != domain.RetestStatusApproved {
 				return domain.RuleViolation(domain.RuleOriginalSampleRetained,
 					"样本已完成初检，且没有引用该留样的已批准复验任务")
 			}

@@ -49,19 +49,12 @@ func (s *ReviewService) RequestRetest(ctx context.Context, task *domain.RetestTa
 		if err := domain.RequireRetestAfterJudgment(lot); err != nil {
 			return err
 		}
-		sample, err := repository.NewSampleRepo(tx).GetByID(ctx, task.SampleID)
+		sample, err := retestRepo.GetRetainedCandidate(ctx, lot.ID, task.SampleID)
 		if err != nil {
 			return err
 		}
 		if err := domain.RequireOriginalSampleRetained(sample); err != nil {
 			return err
-		}
-		plan, err := repository.NewSamplingPlanRepo(tx).GetByLot(ctx, lot.ID)
-		if err != nil {
-			return err
-		}
-		if plan == nil || plan.ID != sample.PlanID {
-			return domain.RuleViolation(domain.RuleOriginalSampleRetained, "复验样本不属于该批次的取样计划")
 		}
 		if lot.Status == domain.LotStatusJudged {
 			if err := transitionLot(ctx, tx, lot, domain.LotStatusRetesting, actor, "request_retest",
