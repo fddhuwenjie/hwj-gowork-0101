@@ -173,6 +173,10 @@ func (s *DailyService) ListCertificates(ctx context.Context, lotID int64) ([]dom
 }
 
 // VerifyCertificate 材质证明核对（事务：R03 牌号/炉批号一致性校验 + 标记核对 + 审计）。
+//
+// 核对带乐观锁：调用方提交 expectedVersion（页面持有的版本号），与当前版本不符
+// 即返回版本冲突（409）并保留已核对的新状态，避免旧页面覆盖另一位审核人的结果。
+// expectedVersion <= 0 表示不校验版本（兼容幂等重放）。
 func (s *DailyService) VerifyCertificate(ctx context.Context, certID, expectedVersion int64, actor string) (*domain.MillCertificate, error) {
 	var out *domain.MillCertificate
 	err := s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
@@ -184,8 +188,12 @@ func (s *DailyService) VerifyCertificate(ctx context.Context, certID, expectedVe
 		if cert == nil {
 			return domain.NotFound("mill_certificate", certID)
 		}
+		// 乐观锁：旧页面提交的版本号与当前不符，明确返回版本冲突，保留新状态
+		if expectedVersion > 0 && cert.Version != expectedVersion {
+			return domain.VersionConflict("mill_certificate", certID, expectedVersion, cert.Version)
+		}
 		if cert.Verified {
-			out = cert // 幂等重放：已核对直接返回
+			out = cert // 幂等重放：已核对（且版本匹配）直接返回
 			return nil
 		}
 		lot, err := loadLot(ctx, tx, cert.LotID, 0)
@@ -195,7 +203,8 @@ func (s *DailyService) VerifyCertificate(ctx context.Context, certID, expectedVe
 		if err := domain.RequireCertMatchesLot(cert, lot); err != nil {
 			return err
 		}
-		ok, err := certRepo.MarkVerifiedWithoutVersion(ctx, cert.ID, actor, nowTime())
+		// 带乐观锁的核对写入：WHERE version = cert.Version 防止读后并发覆盖
+		ok, err := certRepo.MarkVerified(ctx, cert.ID, cert.Version, actor, nowTime())
 		if err != nil {
 			return err
 		}

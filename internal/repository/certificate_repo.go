@@ -135,8 +135,10 @@ func fillCertFields(c *domain.MillCertificate, elements, issuedAt string, verifi
 	return nil
 }
 
-// MarkVerified 标记核对通过，带乐观锁校验。
-func (r *CertificateRepo) MarkVerified(ctx context.Context, id int64, expectedVersion int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
+// MarkVerified 标记核对通过，带乐观锁校验：
+// 仅当数据库当前 version 等于 expectedVersion 时才更新并自增 version，
+// 返回是否命中（true）或版本已被并发更新而错过（false）。
+func (r *CertificateRepo) MarkVerified(ctx context.Context, id, expectedVersion int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE mill_certificates SET verified = 1, verified_by = ?, verified_at = ?, version = version + 1
 		 WHERE id = ? AND version = ?`,
@@ -144,15 +146,6 @@ func (r *CertificateRepo) MarkVerified(ctx context.Context, id int64, expectedVe
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
-}
-
-
-// MarkVerifiedWithoutVersion is a legacy write path without an optimistic lock.
-func (r *CertificateRepo) MarkVerifiedWithoutVersion(ctx context.Context, id int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
-	res, err := r.db.ExecContext(ctx, `UPDATE mill_certificates SET verified = 1, verified_by = ?, verified_at = ?, version = version + 1 WHERE id = ?`, verifiedBy, timeToDB(verifiedAt), id)
-	if err != nil { return false, err }
 	n, err := res.RowsAffected()
 	return n > 0, err
 }

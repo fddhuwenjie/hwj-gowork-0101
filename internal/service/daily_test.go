@@ -352,6 +352,32 @@ func TestVerifyCertificate_Idempotent(t *testing.T) {
 	}
 }
 
+// TestVerifyCertificate_StaleVersionConflict 旧页面持有过期版本号核对应返回版本冲突，
+// 并保留已核对的新状态（不被旧页面覆盖）。
+func TestVerifyCertificate_StaleVersionConflict(t *testing.T) {
+	env := newTestEnv(t)
+	lot := env.mustRegisterLot(t, "L-VC", "304")
+	cert := env.mustVerifiedCert(t, lot, "C-VC") // 当前已核对，version 自增到 2
+
+	staleVersion := cert.Version - 1 // 旧页面持有的版本号（已过期）
+	_, err := env.daily.VerifyCertificate(env.ctx, cert.ID, staleVersion, "latecomer")
+	if !domain.IsCode(err, domain.ErrCodeVersionConflict) {
+		t.Fatalf("期望版本冲突, 实际 %v", err)
+	}
+
+	// 新状态被保留：核对人不变，版本不再自增
+	kept := env.getLot(t, lot.ID) // 触发一次只读以确认库可用
+	_ = kept
+	got, gerr := env.daily.ListCertificates(env.ctx, lot.ID)
+	if gerr != nil || len(got) != 1 {
+		t.Fatalf("ListCertificates: %v %v", got, gerr)
+	}
+	c := got[0]
+	if !c.Verified || c.VerifiedBy != "tester" || c.Version != cert.Version {
+		t.Fatalf("旧页面不应覆盖新状态: %+v", c)
+	}
+}
+
 // TestAcceptLot_R12 不符合批次不可接收。
 func TestAcceptLot_R12(t *testing.T) {
 	env := newTestEnv(t)
