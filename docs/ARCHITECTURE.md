@@ -19,7 +19,7 @@
 | grade_rules | 牌号规则版本 | (grade, version_no) 唯一；draft/active/retired |
 | material_lots | 来料批次 | lot_no 唯一；主流程状态机载体 |
 | mill_certificates | 材质证明 | cert_no 唯一；核对通过方可判定 |
-| sampling_plans | 取样计划 | 每批次一份；含留样位置 retain_location |
+| sampling_plans | 取样计划 | 每批次一份，仅可绑定 registered 批次；含留样位置 retain_location |
 | samples | 取样样本 | (plan_id, sample_no) 唯一；retained 标记留样 |
 | spectrum_reports | 光谱分析报告 | report_no 唯一；提交时按 active 规则固化结论 |
 | conformity_conclusions | 符合性结论 | (lot_id, round) 唯一；初检/复验各一条 |
@@ -62,6 +62,7 @@ R10 让步接收仅对不符合批次；R11 隔离批次不得直接接收；R12
 ## 事务性多实体用例
 
 - 登记批次：批次 + 审计（供方/规则校验失败整体回滚）
+- 制定取样计划：按 plan_no/lot_id 自然键先校验后入库（批次须 registered、每批次一份计划），避免落库冲突后误判
 - 提交光谱报告：报告 + 样本状态 + 审计
 - 符合性判定：结论 + 批次状态/初检结果 + 审计
 - 复验出具结论：结论 + 复验任务 + 批次状态/复验结果 + 审计

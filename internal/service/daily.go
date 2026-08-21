@@ -224,34 +224,46 @@ func (s *DailyService) GetLot(ctx context.Context, id int64) (*domain.MaterialLo
 	return lot, nil
 }
 
-// CreateSamplingPlan 制定取样计划（事务：计划入库 + 审计）。
-// 批次必须处于 registered；每批次仅一份计划。以 plan_no 作为幂等键。
+// CreateSamplingPlan 制定取样计划（事务：校验 + 计划入库 + 审计）。
+//
+// 取样计划只能绑定仍处于登记阶段（registered）的批次，且每批次仅一份计划。
+// 重复提交按两种自然键分别处理：
+//   - 同 plan_no：幂等重放，返回既有计划（created=false），不复用既计划做任何状态变更；
+//   - 同 lot_id（不同 plan_no）：批次已绑定计划，返回版本冲突而非静默接受。
+//
+// 校验在 Insert 之前按 plan_no / lot_id 自然键完成，避免落到 lot_id UNIQUE 上
+// 后再按 plan_no 回查（那样在「不同 plan_no + 已有计划」时会查不到记录而误判为
+// 全新插入，进而引发空指针与互相冲突的样本归属）。
 func (s *DailyService) CreateSamplingPlan(ctx context.Context, plan *domain.SamplingPlan, actor string) (created bool, err error) {
 	if err := plan.Validate(); err != nil {
 		return false, err
 	}
 	err = s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
 		planRepo := repository.NewSamplingPlanRepo(tx)
-		if err := planRepo.Insert(ctx, plan); err != nil {
-			if !domain.IsCode(err, domain.ErrCodeDuplicate) {
-				return err
-			}
-			existing, gerr := planRepo.GetByPlanNo(ctx, plan.PlanNo)
-			if gerr != nil {
-				return gerr
-			}
+		// 1) plan_no 幂等重放：返回既有计划，created 保持 false
+		if existing, gerr := planRepo.GetByPlanNo(ctx, plan.PlanNo); gerr != nil {
+			return gerr
+		} else if existing != nil {
 			*plan = *existing
 			return nil
 		}
+		// 2) 批次必须存在且仍处于登记阶段，取样计划才能与之绑定
 		lot, err := loadLot(ctx, tx, plan.LotID, 0)
 		if err != nil {
 			return err
 		}
-		if lot.Status == domain.LotStatusAccepted {
+		if lot.Status != domain.LotStatusRegistered {
 			return domain.InvalidTransition("material_lot", string(lot.Status), "sampling_plan")
 		}
-		if !planLotStatusAllowed(lot.Status) {
-			return domain.InvalidTransition("material_lot", string(lot.Status), "sampling_plan")
+		// 3) 每批次仅一份计划：已存在（不同 plan_no 的重复提交）按版本冲突拒绝，
+		//    不允许在批次已进入后续取样状态后追加第二份互相冲突的计划
+		if bound, gerr := planRepo.GetByLot(ctx, plan.LotID); gerr != nil {
+			return gerr
+		} else if bound != nil {
+			return domain.VersionConflict("sampling_plan", bound.ID, 0, bound.Version)
+		}
+		if err := planRepo.Insert(ctx, plan); err != nil {
+			return err
 		}
 		created = true
 		return audit(ctx, tx, "sampling_plan", plan.ID, "create", actor,
@@ -350,8 +362,4 @@ func (s *DailyService) CompleteSampling(ctx context.Context, lotID, expectedVers
 		return nil
 	})
 	return out, err
-}
-
-func planLotStatusAllowed(status domain.LotStatus) bool {
-	return status != domain.LotStatusAccepted && status != domain.LotStatusRejected
 }

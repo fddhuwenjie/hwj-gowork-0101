@@ -65,7 +65,7 @@
 | GET | `/api/v1/lots/{id}` | — | 批次详情 |
 | GET | `/api/v1/lots/{id}/detail` | — | 批次全链路聚合（计划/样本/证明/报告/结论） |
 | GET | `/api/v1/lots/{id}/conclusions` | — | 批次结论列表 |
-| POST | `/api/v1/lots/{id}/sampling-plans` | `{plan_no,required_count,retain_location}` | 制定取样计划（含留样位置） |
+| POST | `/api/v1/lots/{id}/sampling-plans` | `{plan_no,required_count,retain_location}` | 制定取样计划（仅对 registered 批次；plan_no 幂等；已绑定计划异号提交 409） |
 | POST | `/api/v1/sampling-plans/{id}/samples` | `{samples:[{sample_no,retained}]}` | 批量登记样本（原子；单样本幂等跳过） |
 | POST | `/api/v1/lots/{id}/sampling-complete` | `{version}` | 取样完成（R06） |
 | POST | `/api/v1/lots/{id}/analyze` | `{version}` | 完成光谱分析 |

@@ -492,3 +492,76 @@ func TestRuleViolation_422_OnJudgeWithoutCert(t *testing.T) {
 		t.Fatalf("期望 R04 rule_violation: %v", resp)
 	}
 }
+
+// TestCreateSamplingPlan_OnlyRegisteredLot 覆盖真实 HTTP 调用下批次与计划的归属校验：
+//   - registered 阶段建计划 201；
+//   - 同号重放幂等 200；
+//   - registered 但已绑定计划时异号提交 409 version_conflict；
+//   - 批次进入 sampled 后再提交新计划必须被拒（不得 500 / 不得静默接受）。
+func TestCreateSamplingPlan_OnlyRegisteredLot(t *testing.T) {
+	env := newHTTPEnv(t)
+	supID := env.mustCreateSupplier("S1")
+	env.mustActivateRule("304", 1)
+	lotID := env.mustRegisterLot("L-PLAN", supID, "304")
+
+	plan := func(no, loc string, count int) map[string]interface{} {
+		return map[string]interface{}{"plan_no": no, "required_count": count, "retain_location": loc}
+	}
+
+	// registered 阶段：首次建计划 201
+	status, resp := env.post(fmt.Sprintf("/api/v1/lots/%d/sampling-plans", lotID), plan("P-PLAN", "柜A", 1), "tester")
+	if status != http.StatusCreated {
+		t.Fatalf("registered 建计划应 201: %d %v", status, resp)
+	}
+	if resp["replayed"] != false {
+		t.Fatalf("首次建计划 replayed 应为 false: %v", resp)
+	}
+
+	// 同 plan_no 重放：200 + replayed=true
+	status, resp = env.post(fmt.Sprintf("/api/v1/lots/%d/sampling-plans", lotID), plan("P-PLAN", "柜A", 1), "tester")
+	if status != http.StatusOK || resp["replayed"] != true {
+		t.Fatalf("同号重放应 200 replayed=true: %d %v", status, resp)
+	}
+
+	// registered 但已绑定计划：不同 plan_no 提交应 409 version_conflict
+	status, resp = env.post(fmt.Sprintf("/api/v1/lots/%d/sampling-plans", lotID), plan("P-PLAN-2", "柜B", 2), "tester")
+	if status != http.StatusConflict {
+		t.Fatalf("已绑定计划异号提交应 409: %d %v", status, resp)
+	}
+	code, _, _ := errDetail(t, resp)
+	if code != "version_conflict" {
+		t.Fatalf("期望 version_conflict, 实际 %s: %v", code, resp)
+	}
+
+	// 推进到 sampled：完成取样
+	ctx := context.Background()
+	lotObj, err := env.daily.GetLot(ctx, lotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planObj := &domain.SamplingPlan{PlanNo: "P-PLAN", LotID: lotID, RequiredCount: 1, RetainLocation: "柜A", CreatedBy: "tester"}
+	_, _ = env.daily.CreateSamplingPlan(ctx, planObj, "tester")
+	smp := &domain.Sample{SampleNo: "S1", Retained: true}
+	if _, err := env.daily.RegisterSamples(ctx, planObj.ID, []*domain.Sample{smp}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.daily.CompleteSampling(ctx, lotObj.ID, 0, "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	// sampled 阶段：不同 plan_no 的新计划必须被拒（409 invalid_transition），不得 500
+	status, resp = env.post(fmt.Sprintf("/api/v1/lots/%d/sampling-plans", lotID), plan("P-PLAN-3", "柜Z", 5), "tester")
+	if status != http.StatusConflict {
+		t.Fatalf("sampled 阶段异号新建应 409: %d %v", status, resp)
+	}
+	code, _, _ = errDetail(t, resp)
+	if code != "invalid_transition" {
+		t.Fatalf("期望 invalid_transition, 实际 %s: %v", code, resp)
+	}
+
+	// 同号重放即便在 sampled 阶段也应幂等 200，不报错
+	status, resp = env.post(fmt.Sprintf("/api/v1/lots/%d/sampling-plans", lotID), plan("P-PLAN", "柜A", 1), "tester")
+	if status != http.StatusOK || resp["replayed"] != true {
+		t.Fatalf("sampled 阶段同号重放应 200 replayed=true: %d %v", status, resp)
+	}
+}
