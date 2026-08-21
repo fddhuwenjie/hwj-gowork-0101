@@ -184,9 +184,6 @@ func (s *DailyService) VerifyCertificate(ctx context.Context, certID, expectedVe
 		if cert == nil {
 			return domain.NotFound("mill_certificate", certID)
 		}
-		if expectedVersion > 0 && cert.Version != expectedVersion {
-			return domain.VersionConflict("mill_certificate", certID, expectedVersion, cert.Version)
-		}
 		if cert.Verified {
 			out = cert // 幂等重放：已核对直接返回
 			return nil
@@ -198,7 +195,7 @@ func (s *DailyService) VerifyCertificate(ctx context.Context, certID, expectedVe
 		if err := domain.RequireCertMatchesLot(cert, lot); err != nil {
 			return err
 		}
-		ok, err := certRepo.MarkVerified(ctx, cert.ID, cert.Version, actor, nowTime())
+		ok, err := certRepo.MarkVerifiedCurrent(ctx, cert.ID, actor, nowTime())
 		if err != nil {
 			return err
 		}

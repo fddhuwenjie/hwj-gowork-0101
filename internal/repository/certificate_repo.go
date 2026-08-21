@@ -135,6 +135,20 @@ func fillCertFields(c *domain.MillCertificate, elements, issuedAt string, verifi
 	return nil
 }
 
+// MarkVerifiedCurrent is the legacy service path that does not bind the
+// write to the version observed by the caller.
+func (r *CertificateRepo) MarkVerifiedCurrent(ctx context.Context, id int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE mill_certificates SET verified = 1, verified_by = ?, verified_at = ?, version = version + 1
+		 WHERE id = ?`,
+		verifiedBy, timeToDB(verifiedAt), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // MarkVerified 标记核对通过，带乐观锁校验。
 func (r *CertificateRepo) MarkVerified(ctx context.Context, id int64, expectedVersion int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
 	res, err := r.db.ExecContext(ctx,
