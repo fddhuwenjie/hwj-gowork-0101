@@ -40,7 +40,10 @@ func (j *BackgroundJob) Validate() error {
 	return nil
 }
 
-// NextRetryAt calculates the next retry eligibility time.
-func (j *BackgroundJob) NextRetryAt(backoff time.Duration) time.Time {
-	return j.CreatedAt.Add(backoff)
+// NextRetryAt 计算下次重试可执行时间：从失败时刻 now 起算退避，
+// 而非入队时刻。队列延迟下首次执行可能远晚于入队时间，
+// 若退避从入队时刻起算，下次重试时间会落在过去而被立即重新领取，
+// 导致同一调度时刻连续重试；故退避须与普通任务一致地从失败时刻起算。
+func (j *BackgroundJob) NextRetryAt(now time.Time, backoff time.Duration) time.Time {
+	return now.Add(backoff)
 }

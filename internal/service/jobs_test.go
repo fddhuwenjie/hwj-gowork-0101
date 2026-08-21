@@ -118,6 +118,53 @@ func TestJob_InvalidPayload_RetryExhaustion(t *testing.T) {
 	}
 }
 
+// TestJob_RetryBackoffAfterQueueDelay 验证：入队后因排队延迟，首次执行远晚于入队时刻，
+// 失败后的重试退避仍从失败时刻起算，不会因为 run_at 落在过去而被立即重新领取。
+// 复现"排队十分钟后才首次执行，失败后却在同一调度时刻被连续领取、尝试次数一直增加"。
+func TestJob_RetryBackoffAfterQueueDelay(t *testing.T) {
+	env := newTestEnv(t)
+	repo := repository.NewJobRepo(env.db)
+
+	// 可控时钟：入队发生在 T0，首次领取因排队延迟发生在 T0+10min。
+	base := time.Now().UTC().Truncate(time.Second)
+	cur := base
+	env.jobs.now = func() time.Time { return cur }
+
+	job, err := env.jobs.Enqueue(env.ctx, JobTypeCertMissingScan, map[string]interface{}{"days": 0}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 入队 10 分钟后才首次领取执行（days=0 非法，必失败）
+	cur = base.Add(10 * time.Minute)
+	ran, err := env.jobs.RunDue(env.ctx)
+	if err != nil || !ran {
+		t.Fatalf("首次执行应被领取并失败: ran=%v err=%v", ran, err)
+	}
+	got, _ := repo.GetByID(env.ctx, job.ID)
+	if got.Status != domain.JobStatusPending || got.Attempts != 1 {
+		t.Fatalf("首次失败后应为 pending/attempts=1: %+v", got)
+	}
+
+	// 关键断言：1s 退避从失败时刻起算，run_at 落在 now 之后，
+	// 同一调度时刻不应被立即重新领取（修复前会基于 CreatedAt 立即重试）。
+	ran, err = env.jobs.RunDue(env.ctx)
+	if err != nil || ran {
+		t.Fatalf("退避未到期不应被重新领取（立即重试 bug）: ran=%v err=%v", ran, err)
+	}
+
+	// 越过退避间隔后才应被再次领取
+	cur = base.Add(10*time.Minute + 2*time.Second)
+	ran, err = env.jobs.RunDue(env.ctx)
+	if err != nil || !ran {
+		t.Fatalf("退避到期后应被领取: ran=%v err=%v", ran, err)
+	}
+	got, _ = repo.GetByID(env.ctx, job.ID)
+	if got.Attempts != 2 {
+		t.Fatalf("第二次执行后 attempts 应为 2: %+v", got)
+	}
+}
+
 // TestJob_UnknownType 未知任务类型执行失败。
 func TestJob_UnknownType(t *testing.T) {
 	env := newTestEnv(t)

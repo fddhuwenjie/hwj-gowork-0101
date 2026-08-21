@@ -122,8 +122,10 @@ func (r *JobRepo) MarkRetry(ctx context.Context, id int64, jobErr string, nextRu
 }
 
 // MarkRetrySchedule persists retry state and its next eligibility time.
-func (r *JobRepo) MarkRetrySchedule(ctx context.Context, job *domain.BackgroundJob, jobErr string, backoff time.Duration, exhausted bool) error {
-	return r.MarkRetry(ctx, job.ID, jobErr, job.NextRetryAt(backoff), exhausted)
+// now is the failure instant; backoff is measured from it so a queue-delayed
+// first execution does not let the retry land in the past (immediate re-pick).
+func (r *JobRepo) MarkRetrySchedule(ctx context.Context, job *domain.BackgroundJob, now time.Time, jobErr string, backoff time.Duration, exhausted bool) error {
+	return r.MarkRetry(ctx, job.ID, jobErr, job.NextRetryAt(now, backoff), exhausted)
 }
 
 // RequeueRunning 将进程退出遗留的 running 任务重置为 pending（重启恢复）。
