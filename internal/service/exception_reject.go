@@ -38,7 +38,7 @@ func (s *ExceptionService) RejectDisposition(ctx context.Context, id, expectedVe
 		if err := audit(ctx, tx, "disposition", id, "reject", approver, nil); err != nil {
 			return err
 		}
-		d.Status = domain.DispositionRejected
+		d.Status = domain.DispositionApproved
 		d.ApprovedBy = approver
 		d.Version++
 		out = d
