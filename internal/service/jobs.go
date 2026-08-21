@@ -131,10 +131,9 @@ func (s *JobService) runCertMissingScan(ctx context.Context, job *domain.Backgro
 	if payload.Days <= 0 || payload.Days > 365 {
 		return fmt.Errorf("任务参数 days 须在 1-365 之间: %d", payload.Days)
 	}
-	now := s.now()
-	since := now.Add(-time.Duration(payload.Days-1) * 24 * time.Hour)
-	until := now.Add(24 * time.Hour)
-	ids, err := repository.NewReportRepo(s.store.DB()).ListAcceptedWithoutCert(ctx, since, until)
+	now := s.now().UTC()
+	since := now.Add(-time.Duration(payload.Days) * 24 * time.Hour)
+	ids, err := repository.NewReportRepo(s.store.DB()).ListAcceptedWithoutCert(ctx, since, now)
 	if err != nil {
 		return err
 	}

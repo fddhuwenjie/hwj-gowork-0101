@@ -88,5 +88,7 @@ failed，可经 `POST /api/v1/jobs/{id}/retry` 人工重置；进程重启时将
 - `GET /api/v1/reports/retest-accepted`：初检 fail 且复验 pass 且已接收的批次与证明编号，
   按批次 id 升序。
 - `GET /api/v1/reports/cert-missing-accepted`：各供方近 N 天无证明而先接收的批次数量，
-  按数量降序、供方编码升序。
+  按数量降序、供方编码升序。“近 N 天”以批次实际接收时刻（`accepted_at`）落在
+  `[now-N天, now]`（含两端）为准；`cert_missing_scan` 后台扫描采用同一时间窗口，
+  为每个窗口内缺证批次写入一条 `cert_missing_flagged` 审计告警。
 - 全部列表端点：排序键白名单校验 + 同键按 id 升序兜底，保证稳定顺序。

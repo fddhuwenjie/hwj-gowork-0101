@@ -64,8 +64,9 @@ func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageReques
 	return domain.NewPage(items, total, p), nil
 }
 
-// CountCertMissingAccepted 派生查询二：统计各供方在指定时间之后
+// CountCertMissingAccepted 派生查询二：统计各供方在 [since, until] 区间内
 // “材质证明缺失而先接收”的批次数量，按数量降序、供方编码升序稳定排列。
+// 区间两端均含（>= since AND <= until），以匹配“近 N 天内实际接收”的语义。
 func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since, until time.Time) ([]domain.CertMissingAcceptedRow, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT s.id, s.code, s.name, COUNT(l.id) AS lot_count
@@ -73,7 +74,7 @@ func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since, until 
 		 JOIN material_lots l ON l.supplier_id = s.id
 		 WHERE l.status = 'accepted'
 		   AND l.accepted_at >= ?
-		   AND l.accepted_at < ?
+		   AND l.accepted_at <= ?
 		   AND NOT EXISTS (SELECT 1 FROM mill_certificates mc WHERE mc.lot_id = l.id)
 		 GROUP BY s.id, s.code, s.name
 		 ORDER BY lot_count DESC, s.code ASC`, timeToDB(since), timeToDB(until))
@@ -92,12 +93,12 @@ func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since, until 
 	return items, rows.Err()
 }
 
-// ListAcceptedWithoutCert 列出指定时间之后接收且缺少材质证明的批次 id，
-// 供后台任务（材质证明缺失扫描）使用。
+// ListAcceptedWithoutCert 列出 [since, until] 区间内接收且缺少材质证明的批次 id，
+// 供后台任务（材质证明缺失扫描）使用。区间两端均含，与 CountCertMissingAccepted 口径一致。
 func (r *ReportRepo) ListAcceptedWithoutCert(ctx context.Context, since, until time.Time) ([]int64, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT l.id FROM material_lots l
-		 WHERE l.status = 'accepted' AND l.accepted_at >= ? AND l.accepted_at < ?
+		 WHERE l.status = 'accepted' AND l.accepted_at >= ? AND l.accepted_at <= ?
 		   AND NOT EXISTS (SELECT 1 FROM mill_certificates mc WHERE mc.lot_id = l.id)
 		 ORDER BY l.id ASC`, timeToDB(since), timeToDB(until))
 	if err != nil {

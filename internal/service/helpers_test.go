@@ -59,6 +59,43 @@ func newTestEnv(t *testing.T) *testEnv {
 	return env
 }
 
+// newTestEnvWithClock 以固定时钟构造测试环境，便于校验依赖当前时间的时间窗口。
+// report 与 jobs 服务均注入该时钟；daily/exception 仍用真实时钟写入 accepted_at，
+// 测试需要精确边界时用 setLotAcceptedAt 改写接收时刻为相对时钟的特定时刻。
+func newTestEnvWithClock(t *testing.T, now time.Time) *testEnv {
+	t.Helper()
+	ctx := context.Background()
+	db, err := repository.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := NewStore(db)
+	clock := func() time.Time { return now }
+	env := &testEnv{
+		ctx: ctx, db: db, store: store,
+		daily:     NewDailyService(store),
+		exception: NewExceptionService(store),
+		review:    NewReviewService(store),
+		report:    NewReportServiceWithClock(store, clock),
+		jobs:      &JobService{store: store, now: clock},
+	}
+	env.supplier = env.mustSupplier(t, "S1")
+	env.mustActiveGradeRule(t, "304", 1)
+	return env
+}
+
+// setLotAcceptedAt 直接改写批次的接收时刻，用于时间窗口边界测试。
+// 返回格式化为入库文本的时间值。
+func (e *testEnv) setLotAcceptedAt(t *testing.T, id int64, acceptedAt time.Time) {
+	t.Helper()
+	if _, err := e.db.ExecContext(e.ctx,
+		`UPDATE material_lots SET accepted_at = ? WHERE id = ?`,
+		acceptedAt.UTC().Format(time.RFC3339Nano), id); err != nil {
+		t.Fatalf("改写 accepted_at 失败: %v", err)
+	}
+}
+
 func (e *testEnv) mustSupplier(t *testing.T, code string) *domain.Supplier {
 	t.Helper()
 	sup := &domain.Supplier{Code: code, Name: "供方" + code}
