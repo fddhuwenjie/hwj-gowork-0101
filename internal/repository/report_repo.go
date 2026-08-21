@@ -27,9 +27,7 @@ func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageReques
 		JOIN suppliers s ON s.id = l.supplier_id
 		JOIN conformity_conclusions ci ON ci.lot_id = l.id AND ci.round = 'initial' AND ci.result = 'fail'
 		JOIN conformity_conclusions cr ON cr.lot_id = l.id AND cr.round = 'retest' AND cr.result = 'pass'
-		LEFT JOIN mill_certificates mc ON mc.id = (
-			SELECT MAX(id) FROM mill_certificates WHERE lot_id = l.id
-		)
+		LEFT JOIN mill_certificates mc ON mc.lot_id = l.id
 		WHERE l.status = 'accepted'`
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*)`+base).Scan(&total); err != nil {

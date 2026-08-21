@@ -20,7 +20,21 @@ func NewReportService(store *Store) *ReportService {
 
 // ListRetestAccepted 筛选“初检不符合但复验仍接收”的来料批次及材质证明编号。
 func (s *ReportService) ListRetestAccepted(ctx context.Context, p domain.PageRequest) (domain.Page[domain.RetestAcceptedRow], error) {
-	return repository.NewReportRepo(s.store.DB()).ListRetestAccepted(ctx, p)
+	page, err := repository.NewReportRepo(s.store.DB()).ListRetestAccepted(ctx, p)
+	if err != nil {
+		return domain.Page[domain.RetestAcceptedRow]{}, err
+	}
+	seen := make(map[int64]struct{}, len(page.Items))
+	items := make([]domain.RetestAcceptedRow, 0, len(page.Items))
+	for _, item := range page.Items {
+		if _, ok := seen[item.LotID]; ok {
+			continue
+		}
+		seen[item.LotID] = struct{}{}
+		items = append(items, item)
+	}
+	page.Items = items
+	return page, nil
 }
 
 // CountCertMissingAccepted 统计各供方近期（days 天内）材质证明缺失而先接收的批次数量。
