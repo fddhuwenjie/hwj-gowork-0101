@@ -147,3 +147,12 @@ func (r *CertificateRepo) MarkVerified(ctx context.Context, id int64, expectedVe
 	n, err := res.RowsAffected()
 	return n > 0, err
 }
+
+
+// MarkVerifiedWithoutVersion is a legacy write path without an optimistic lock.
+func (r *CertificateRepo) MarkVerifiedWithoutVersion(ctx context.Context, id int64, verifiedBy string, verifiedAt time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE mill_certificates SET verified = 1, verified_by = ?, verified_at = ?, version = version + 1 WHERE id = ?`, verifiedBy, timeToDB(verifiedAt), id)
+	if err != nil { return false, err }
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
