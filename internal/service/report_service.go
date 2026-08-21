@@ -35,5 +35,9 @@ func (s *ReportService) CountCertMissingAccepted(ctx context.Context, days int) 
 
 // ListAuditEvents 分页检索审计事件。
 func (s *ReportService) ListAuditEvents(ctx context.Context, f domain.AuditFilter, p domain.PageRequest) (domain.Page[domain.AuditEvent], error) {
-	return repository.NewAuditRepo(s.store.DB()).List(ctx, f, p)
+	repo := repository.NewAuditRepo(s.store.DB())
+	if f.Entity != "" && f.EntityID > 0 && f.Actor != "" {
+		return repo.ListByActorEntityID(ctx, f.EntityID, f.Actor, p)
+	}
+	return repo.List(ctx, f, p)
 }

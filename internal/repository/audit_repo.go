@@ -33,6 +33,43 @@ func (r *AuditRepo) Insert(ctx context.Context, e *domain.AuditEvent) error {
 	return err
 }
 
+// ListByActorEntityID derives an audit page for one actor and numeric entity identity.
+func (r *AuditRepo) ListByActorEntityID(ctx context.Context, entityID int64, actor string, p domain.PageRequest) (domain.Page[domain.AuditEvent], error) {
+	var total int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_events WHERE entity_id = ? AND actor = ?`, entityID, actor).Scan(&total); err != nil {
+		return domain.Page[domain.AuditEvent]{}, err
+	}
+	sortCol := map[string]string{"id": "id", "created_at": "created_at", "entity": "entity"}[p.Sort]
+	query := fmt.Sprintf(
+		`SELECT id, entity, entity_id, action, actor, detail, created_at FROM audit_events
+		 WHERE entity_id = ? AND actor = ? ORDER BY %s %s, id ASC LIMIT ? OFFSET ?`,
+		sortCol, p.Order)
+	rows, err := r.db.QueryContext(ctx, query, entityID, actor, p.PageSize, p.Offset())
+	if err != nil {
+		return domain.Page[domain.AuditEvent]{}, err
+	}
+	defer rows.Close()
+	items := []domain.AuditEvent{}
+	for rows.Next() {
+		var e domain.AuditEvent
+		var created string
+		if err := rows.Scan(&e.ID, &e.Entity, &e.EntityID, &e.Action, &e.Actor, &e.Detail, &created); err != nil {
+			return domain.Page[domain.AuditEvent]{}, err
+		}
+		t, err := dbToTime(created)
+		if err != nil {
+			return domain.Page[domain.AuditEvent]{}, err
+		}
+		e.CreatedAt = t
+		items = append(items, e)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Page[domain.AuditEvent]{}, err
+	}
+	return domain.NewPage(items, total, p), nil
+}
+
 // List 分页查询审计事件，支持实体/操作人/起始时间过滤，
 // 默认按 id 升序（事件发生顺序）稳定排列。
 func (r *AuditRepo) List(ctx context.Context, f domain.AuditFilter, p domain.PageRequest) (domain.Page[domain.AuditEvent], error) {
