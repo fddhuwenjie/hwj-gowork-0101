@@ -66,16 +66,17 @@ func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageReques
 
 // CountCertMissingAccepted 派生查询二：统计各供方在指定时间之后
 // “材质证明缺失而先接收”的批次数量，按数量降序、供方编码升序稳定排列。
-func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since time.Time) ([]domain.CertMissingAcceptedRow, error) {
+func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since, until time.Time) ([]domain.CertMissingAcceptedRow, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT s.id, s.code, s.name, COUNT(l.id) AS lot_count
 		 FROM suppliers s
 		 JOIN material_lots l ON l.supplier_id = s.id
 		 WHERE l.status = 'accepted'
 		   AND l.accepted_at >= ?
+		   AND l.accepted_at < ?
 		   AND NOT EXISTS (SELECT 1 FROM mill_certificates mc WHERE mc.lot_id = l.id)
 		 GROUP BY s.id, s.code, s.name
-		 ORDER BY lot_count DESC, s.code ASC`, timeToDB(since))
+		 ORDER BY lot_count DESC, s.code ASC`, timeToDB(since), timeToDB(until))
 	if err != nil {
 		return nil, err
 	}
@@ -93,12 +94,12 @@ func (r *ReportRepo) CountCertMissingAccepted(ctx context.Context, since time.Ti
 
 // ListAcceptedWithoutCert 列出指定时间之后接收且缺少材质证明的批次 id，
 // 供后台任务（材质证明缺失扫描）使用。
-func (r *ReportRepo) ListAcceptedWithoutCert(ctx context.Context, since time.Time) ([]int64, error) {
+func (r *ReportRepo) ListAcceptedWithoutCert(ctx context.Context, since, until time.Time) ([]int64, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT l.id FROM material_lots l
-		 WHERE l.status = 'accepted' AND l.accepted_at >= ?
+		 WHERE l.status = 'accepted' AND l.accepted_at >= ? AND l.accepted_at < ?
 		   AND NOT EXISTS (SELECT 1 FROM mill_certificates mc WHERE mc.lot_id = l.id)
-		 ORDER BY l.id ASC`, timeToDB(since))
+		 ORDER BY l.id ASC`, timeToDB(since), timeToDB(until))
 	if err != nil {
 		return nil, err
 	}

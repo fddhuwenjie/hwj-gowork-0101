@@ -29,8 +29,10 @@ func (s *ReportService) CountCertMissingAccepted(ctx context.Context, days int) 
 	if days <= 0 || days > 365 {
 		return nil, domain.Validation("days", "days 须在 1-365 之间")
 	}
-	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
-	return repository.NewReportRepo(s.store.DB()).CountCertMissingAccepted(ctx, since)
+	now := time.Now().UTC()
+	since := now.Add(-time.Duration(days-1) * 24 * time.Hour)
+	until := now.Add(24 * time.Hour)
+	return repository.NewReportRepo(s.store.DB()).CountCertMissingAccepted(ctx, since, until)
 }
 
 // ListAuditEvents 分页检索审计事件。
