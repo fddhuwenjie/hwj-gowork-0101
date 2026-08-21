@@ -38,7 +38,8 @@ func (s *ExceptionService) RejectDisposition(ctx context.Context, id, expectedVe
 		if err := audit(ctx, tx, "disposition", id, "reject", approver, nil); err != nil {
 			return err
 		}
-		d.Status = domain.DispositionApproved
+		// 驳回后状态须保持 rejected，与持久化层一致，避免在后续执行入口被误判为 approved。
+		d.Status = domain.DispositionRejected
 		d.ApprovedBy = approver
 		d.Version++
 		out = d

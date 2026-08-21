@@ -153,3 +153,44 @@ func TestBatchAccept_PartialFailure(t *testing.T) {
 		t.Fatalf("超量应 validation, 实际 %v", err)
 	}
 }
+
+// TestDisposition_RejectStaysRejected 驳回处置单后状态须保持 rejected，
+// 且不得被后续执行入口误识别为 approved 而推动批次变化（领域/服务层状态一致性回归）。
+func TestDisposition_RejectStaysRejected(t *testing.T) {
+	env := newTestEnv(t)
+	lot := env.mustRegisterLot(t, "L-RJD", "304")
+
+	d := &domain.Disposition{LotID: lot.ID, Type: domain.DispositionQuarantine, Reason: "疑似混料", ProposedBy: "tester"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, d, "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 驳回：返回对象与持久化状态都必须是 rejected，而非被错误转换为 approved。
+	d, err := env.exception.RejectDisposition(env.ctx, d.ID, 0, "boss")
+	if err != nil {
+		t.Fatalf("驳回处置单失败: %v", err)
+	}
+	if d.Status != domain.DispositionRejected {
+		t.Fatalf("驳回后返回状态应为 rejected, 实际 %s", d.Status)
+	}
+
+	// 重载确认持久化层与业务状态一致。
+	page, err := env.exception.ListDispositions(env.ctx,
+		domain.DispositionFilter{LotID: lot.ID}, domain.PageRequest{Page: 1, PageSize: 10, Sort: "id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Status != domain.DispositionRejected {
+		t.Fatalf("重载后状态应仍为 rejected, 实际 %+v", page.Items)
+	}
+
+	// 驳回单不得在执行入口被识别为 approved 而推动批次流转（scrap 会使批次进入 rejected）。
+	lotBefore := env.getLot(t, lot.ID)
+	if _, err := env.exception.ExecuteDisposition(env.ctx, d.ID, d.Version, "boss", "scrap"); !domain.IsCode(err, domain.ErrCodeInvalidTransition) {
+		t.Fatalf("驳回单执行应返回 invalid_transition, 实际 %v", err)
+	}
+	lotAfter := env.getLot(t, lot.ID)
+	if lotAfter.Status != lotBefore.Status || lotAfter.Version != lotBefore.Version {
+		t.Fatalf("驳回单不应推动批次变化: before=%+v after=%+v", lotBefore, lotAfter)
+	}
+}
