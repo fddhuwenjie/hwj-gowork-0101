@@ -296,9 +296,10 @@ func (s *DailyService) AcceptLot(ctx context.Context, lotID, expectedVersion int
 		if err != nil {
 			return err
 		}
-		if lot.RetestResult != "" && hasConcession && lot.AcceptanceResult() == string(domain.ResultFail) {
-			return domain.RuleViolation(domain.RuleAcceptRequiresPassOrConcession, "历史初检结论仍为不符合，不能接收")
-		}
+		// R12 接收须结论 pass 或有已批准让步。结论取 FinalResult()：复验结论一旦
+		// 出具即覆盖初检，故复验 pass 后当前结论为 pass，应按当前结论放行，不再被
+		// 历史初检结果拦住；仅有初检 fail 而无复验通过证据（FinalResult 非 pass）
+		// 的批次不得直接接收，须凭已批准的让步接收单接收。
 		if err := domain.RequirePassOrConcessionForAccept(lot, hasConcession); err != nil {
 			return err
 		}

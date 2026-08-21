@@ -103,6 +103,105 @@ func TestRetestFlow_Full(t *testing.T) {
 	}
 }
 
+// TestAcceptLot_RetestPassOverridesInitialFailWithConcession 复现状态链路：
+// 初检 fail → 让步审批通过 → 复验合格（共同决定覆盖）→ 接收。
+// 复验结论已覆盖初检后，接收应按当前结论（pass）放行，不得再被历史初检 fail 拦住。
+func TestAcceptLot_RetestPassOverridesInitialFailWithConcession(t *testing.T) {
+	env := newTestEnv(t)
+	lot, samples, _ := env.mustJudgedLot(t, "L-RTCONC", false)
+	retained := samples[0] // helpers 中首个样本留样
+
+	// 让步接收：提出 → 批准（不改变批次状态，仅赋予接收资格）
+	disp := &domain.Disposition{LotID: lot.ID, Type: domain.DispositionConcession, Reason: "客户同意让步", ProposedBy: "proposer"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, disp, "proposer"); err != nil {
+		t.Fatalf("提出让步失败: %v", err)
+	}
+	if _, err := env.exception.ApproveDisposition(env.ctx, disp.ID, 0, "approver"); err != nil {
+		t.Fatalf("批准让步失败: %v", err)
+	}
+
+	// 异议复验：申请 → 批准 → 复验光谱报告（范围内）→ 结论 pass（覆盖初检，须共同决定）
+	task := &domain.RetestTask{LotID: lot.ID, SampleID: retained.ID, Reason: "供方异议", RequestedBy: "requester"}
+	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+		t.Fatalf("申请复验失败: %v", err)
+	}
+	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+		t.Fatalf("批准复验失败: %v", err)
+	}
+	rep := &domain.SpectrumReport{ReportNo: "R-RTCONC-RETEST", SampleID: retained.ID, Readings: inRangeReadings(), Analyzer: "tester2"}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, rep, "tester2"); err != nil {
+		t.Fatalf("复验报告提交失败: %v", err)
+	}
+	conclusion, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultPass, "judge2", "co-judge", "共同决定覆盖")
+	if err != nil {
+		t.Fatalf("出具复验结论失败: %v", err)
+	}
+	if !conclusion.OverridesPrev || conclusion.CoDecidedBy != "co-judge" {
+		t.Fatalf("复验结论未标记覆盖/缺少共同决定人: %+v", conclusion)
+	}
+	lot = env.getLot(t, lot.ID)
+	if lot.InitialResult != "fail" || lot.RetestResult != "pass" || lot.FinalResult() != "pass" {
+		t.Fatalf("结论落库不符: initial=%s retest=%s final=%s", lot.InitialResult, lot.RetestResult, lot.FinalResult())
+	}
+
+	// 接收：复验已覆盖初检，应按当前结论 pass 放行，不被历史初检 fail 拦住
+	accepted, err := env.daily.AcceptLot(env.ctx, lot.ID, 0, "receiver")
+	if err != nil {
+		t.Fatalf("复验覆盖初检后接收应成功，却被拦住: %v", err)
+	}
+	if accepted.Status != domain.LotStatusAccepted || accepted.AcceptedBy != "receiver" || accepted.AcceptedAt == nil {
+		t.Fatalf("接收结果不符: %+v", accepted)
+	}
+}
+
+// TestAcceptLot_NoRetestPassEvidenceNotDirectlyReceived 保留约束：
+// 没有复验通过证据（FinalResult 非 pass）的批次不得直接接收，须凭让步单。
+func TestAcceptLot_NoRetestPassEvidenceNotDirectlyReceived(t *testing.T) {
+	env := newTestEnv(t)
+	lot, samples, _ := env.mustJudgedLot(t, "L-NOPASS", false)
+	retained := samples[0]
+
+	// 复验复跑后仍 fail：无复验通过证据，FinalResult 仍为 fail
+	task := &domain.RetestTask{LotID: lot.ID, SampleID: retained.ID, Reason: "异议", RequestedBy: "requester"}
+	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+	rep := &domain.SpectrumReport{ReportNo: "R-NOPASS-RETEST", SampleID: retained.ID, Readings: outOfRangeReadings(), Analyzer: "tester2"}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, rep, "tester2"); err != nil {
+		t.Fatal(err)
+	}
+	// fail 与初检一致，非覆盖，无需共同决定人
+	if _, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultFail, "judge2", "", "维持原判"); err != nil {
+		t.Fatal(err)
+	}
+	lot = env.getLot(t, lot.ID)
+	if lot.RetestResult != "fail" || lot.FinalResult() != "fail" {
+		t.Fatalf("复验 fail 后结论不符: retest=%s final=%s", lot.RetestResult, lot.FinalResult())
+	}
+
+	// 无让步：无复验通过证据，不得直接接收（R12）
+	if _, err := env.daily.AcceptLot(env.ctx, lot.ID, 0, "receiver"); err == nil {
+		t.Fatal("无复验通过证据且无让步的批次不得直接接收")
+	} else if de := domain.AsDomain(err); de.Code != domain.ErrCodeRuleViolation || de.Rule != domain.RuleAcceptRequiresPassOrConcession {
+		t.Fatalf("期望 R12 规则违反, 实际 %v", err)
+	}
+
+	// 有让步：凭让步单可接收（非直接接收）
+	disp := &domain.Disposition{LotID: lot.ID, Type: domain.DispositionConcession, Reason: "让步", ProposedBy: "proposer"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, disp, "proposer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.exception.ApproveDisposition(env.ctx, disp.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.daily.AcceptLot(env.ctx, lot.ID, 0, "receiver"); err != nil {
+		t.Fatalf("凭已批准让步单的 fail 批次应可接收: %v", err)
+	}
+}
+
 // TestRequestRetest_R07 未判定批次不能发起复验。
 func TestRequestRetest_R07(t *testing.T) {
 	env := newTestEnv(t)

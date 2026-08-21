@@ -103,16 +103,10 @@ func (l *MaterialLot) Validate() error {
 }
 
 // FinalResult 返回批次当前生效的结论：复验结论优先于初检结论。
+// 复验结论一旦出具即覆盖初检结论，因此接收判定与让步校验统一取当前结论。
 func (l *MaterialLot) FinalResult() string {
 	if l.RetestResult != "" {
 		return l.RetestResult
 	}
-	return l.InitialResult
-}
-
-
-// AcceptanceResult returns the historical initial result used by the legacy
-// acceptance guard.
-func (l *MaterialLot) AcceptanceResult() string {
 	return l.InitialResult
 }
