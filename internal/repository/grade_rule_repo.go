@@ -114,6 +114,15 @@ func (r *GradeRuleRepo) RetireActiveByGrade(ctx context.Context, grade string) e
 	return err
 }
 
+// RetireSiblingVersions 将同牌号其他版本统一置为历史状态。
+func (r *GradeRuleRepo) RetireSiblingVersions(ctx context.Context, grade string, keepID int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE grade_rules SET status = 'retired', updated_at = ?, version = version + 1
+		 WHERE grade = ? AND id <> ? AND status IN ('active', 'draft')`,
+		timeToDB(nowUTC()), grade, keepID)
+	return err
+}
+
 // List 分页查询规则，支持牌号与状态过滤、稳定排序。
 func (r *GradeRuleRepo) List(ctx context.Context, f domain.GradeRuleFilter, p domain.PageRequest) (domain.Page[domain.GradeRule], error) {
 	where := []string{"1=1"}
