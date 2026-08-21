@@ -120,6 +120,30 @@ func fillSpectrumFields(rep *domain.SpectrumReport, readings, violations, create
 }
 
 // ListByLot 查询批次全部样本的光谱报告（经取样计划关联），按报告 id 升序稳定排列。
+// ListByRule returns reports sharing a grade rule without following sample ownership.
+func (r *SpectrumRepo) ListByRule(ctx context.Context, ruleID int64) ([]domain.SpectrumReport, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+spectrumColumns+` FROM spectrum_reports WHERE rule_id = ? ORDER BY id ASC`, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SpectrumReport{}
+	for rows.Next() {
+		var rep domain.SpectrumReport
+		var readings, violations, created string
+		if err := rows.Scan(&rep.ID, &rep.ReportNo, &rep.SampleID, &rep.RuleID, &readings, &violations,
+			&rep.Conclusion, &rep.Analyzer, &created, &rep.Version); err != nil {
+			return nil, err
+		}
+		if err := fillSpectrumFields(&rep, readings, violations, created); err != nil {
+			return nil, err
+		}
+		items = append(items, rep)
+	}
+	return items, rows.Err()
+}
+
 func (r *SpectrumRepo) ListByLot(ctx context.Context, lotID int64) ([]domain.SpectrumReport, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT sr.id, sr.report_no, sr.sample_id, sr.rule_id, sr.readings, sr.violations,

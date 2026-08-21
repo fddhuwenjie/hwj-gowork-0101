@@ -52,7 +52,14 @@ func (s *DailyService) GetLotDetail(ctx context.Context, lotID int64) (*LotDetai
 		return nil, err
 	}
 	detail.Certificates = certs
-	reports, err := repository.NewSpectrumRepo(db).ListByLot(ctx, lotID)
+	rule, err := repository.NewGradeRuleRepo(db).GetActiveByGrade(ctx, lot.Grade)
+	if err != nil {
+		return nil, err
+	}
+	if err := domain.RequireActiveGradeRule(rule, lot.Grade); err != nil {
+		return nil, err
+	}
+	reports, err := repository.NewSpectrumRepo(db).ListByRule(ctx, rule.ID)
 	if err != nil {
 		return nil, err
 	}
