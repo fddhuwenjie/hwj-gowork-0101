@@ -730,6 +730,94 @@ func TestAuditRepo(t *testing.T) {
 	}
 }
 
+// TestReportRepo_ListRetestAccepted_NoFanOut 校验派生查询一不会因批次补录
+// 多版材质证明而产生 fan-out：每个批次恒一行，total 与翻页结果一致。
+// 回归点：原实现用 LEFT JOIN mill_certificates，多版证明导致 COUNT 与分页
+// 行数按证明版本数膨胀，page_size=1 时第二页重复第一批次、第二批次被挤到第三页。
+func TestReportRepo_ListRetestAccepted_NoFanOut(t *testing.T) {
+	db, ctx := openTestDB(t)
+	sup := mustSupplier(t, db, ctx, "S1")
+	lotRepo := NewLotRepo(db)
+	certRepo := NewCertificateRepo(db)
+	conclRepo := NewConclusionRepo(db)
+	reportRepo := NewReportRepo(db)
+
+	// 第一批次：accepted + initial fail + retest pass + 两版证明
+	lot1 := mustLot(t, db, ctx, "L-RA1", sup.ID, "304")
+	if _, err := lotRepo.Transition(ctx, lot1.ID, lot1.Version, domain.LotStatusAccepted, nil, nil, strPtr("r"), ptrNow()); err != nil {
+		t.Fatal(err)
+	}
+	c1a := &domain.MillCertificate{CertNo: "C-RA1", LotID: lot1.ID, Grade: "304", HeatNo: lot1.HeatNo, IssuedAt: time.Now().UTC()}
+	if err := certRepo.Insert(ctx, c1a); err != nil {
+		t.Fatal(err)
+	}
+	c1b := &domain.MillCertificate{CertNo: "C-RA1-V2", LotID: lot1.ID, Grade: "304", HeatNo: lot1.HeatNo, IssuedAt: time.Now().UTC()}
+	if err := certRepo.Insert(ctx, c1b); err != nil { // 补录第二版
+		t.Fatal(err)
+	}
+	if err := conclRepo.Insert(ctx, &domain.ConformityConclusion{LotID: lot1.ID, Round: domain.RoundInitial, Result: domain.ResultFail, DecidedBy: "j1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conclRepo.Insert(ctx, &domain.ConformityConclusion{LotID: lot1.ID, Round: domain.RoundRetest, Result: domain.ResultPass, DecidedBy: "j2", CoDecidedBy: "co"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 第二批次：accepted + initial fail + retest pass + 单版证明
+	lot2 := mustLot(t, db, ctx, "L-RA2", sup.ID, "304")
+	if _, err := lotRepo.Transition(ctx, lot2.ID, lot2.Version, domain.LotStatusAccepted, nil, nil, strPtr("r"), ptrNow()); err != nil {
+		t.Fatal(err)
+	}
+	c2 := &domain.MillCertificate{CertNo: "C-RA2", LotID: lot2.ID, Grade: "304", HeatNo: lot2.HeatNo, IssuedAt: time.Now().UTC()}
+	if err := certRepo.Insert(ctx, c2); err != nil {
+		t.Fatal(err)
+	}
+	if err := conclRepo.Insert(ctx, &domain.ConformityConclusion{LotID: lot2.ID, Round: domain.RoundInitial, Result: domain.ResultFail, DecidedBy: "j1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conclRepo.Insert(ctx, &domain.ConformityConclusion{LotID: lot2.ID, Round: domain.RoundRetest, Result: domain.ResultPass, DecidedBy: "j2", CoDecidedBy: "co"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 每页一行翻页：批次集合与 total 一致，不跨页重复
+	seen := map[int64]bool{}
+	for page := 1; ; page++ {
+		p, err := reportRepo.ListRetestAccepted(ctx, domain.PageRequest{Page: page, PageSize: 1, Sort: "id", Order: "asc"})
+		if err != nil {
+			t.Fatalf("第 %d 页查询失败: %v", page, err)
+		}
+		if p.Total != 2 {
+			t.Fatalf("total = %d, 期望 2（每批次一行）: %+v", p.Total, p)
+		}
+		if len(p.Items) == 0 {
+			break
+		}
+		for _, row := range p.Items {
+			if seen[row.LotID] {
+				t.Fatalf("第 %d 页重复出现批次 %d", page, row.LotID)
+			}
+			seen[row.LotID] = true
+		}
+		if page > 10 {
+			t.Fatal("翻页超出预期，疑似重复分页")
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("翻页批次集合 = %v, 期望两批", seen)
+	}
+
+	// 第一批次证明编号应取补录后的最新版本
+	p1, err := reportRepo.ListRetestAccepted(ctx, domain.PageRequest{Page: 1, PageSize: 1, Sort: "id", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1.Items[0].LotNo != "L-RA1" || p1.Items[0].CertNo != "C-RA1-V2" {
+		t.Fatalf("第一页/证明版本不符: %+v", p1.Items[0])
+	}
+}
+
+func strPtr(s string) *string { return &s }
+func ptrNow() *time.Time      { t := time.Now().UTC(); return &t }
+
 func TestReopenPersistence(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "test.db")

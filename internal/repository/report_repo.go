@@ -21,21 +21,25 @@ func NewReportRepo(db DBTX) *ReportRepo {
 // 返回批次号与材质证明编号，按批次 id 升序稳定排列。
 //
 // 条件：批次状态为 accepted，存在 fail 的初检结论，存在 pass 的复验结论。
+// 每个批次只取最新一版材质证明（与 LatestByLot 口径一致）：证明编号用
+// 标量子查询取得，不与 mill_certificates 做 JOIN，从而避免一个批次
+// 因补录多版证明而在 COUNT 与分页查询中产生 fan-out（行数/总数不一致、翻页重复）。
 func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageRequest) (domain.Page[domain.RetestAcceptedRow], error) {
 	base := `
 		FROM material_lots l
 		JOIN suppliers s ON s.id = l.supplier_id
 		JOIN conformity_conclusions ci ON ci.lot_id = l.id AND ci.round = 'initial' AND ci.result = 'fail'
 		JOIN conformity_conclusions cr ON cr.lot_id = l.id AND cr.round = 'retest' AND cr.result = 'pass'
-		LEFT JOIN mill_certificates mc ON mc.lot_id = l.id
 		WHERE l.status = 'accepted'`
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*)`+base).Scan(&total); err != nil {
 		return domain.Page[domain.RetestAcceptedRow]{}, err
 	}
+	// latest_cert_no 为每个批次取 id 最大的一版证明编号，保证一批次一行、且为最新版本。
+	const latestCertNo = `(SELECT mc.cert_no FROM mill_certificates mc WHERE mc.lot_id = l.id ORDER BY mc.id DESC LIMIT 1)`
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT l.id, l.lot_no, s.code, l.grade, l.heat_no,
-		        COALESCE(mc.cert_no, ''), cr.decided_by, cr.co_decided_by, COALESCE(l.accepted_at, l.updated_at)`+base+`
+		        COALESCE((`+latestCertNo+`), ''), cr.decided_by, cr.co_decided_by, COALESCE(l.accepted_at, l.updated_at)`+base+`
 		 ORDER BY l.id ASC LIMIT ? OFFSET ?`, p.PageSize, p.Offset())
 	if err != nil {
 		return domain.Page[domain.RetestAcceptedRow]{}, err
