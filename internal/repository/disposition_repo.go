@@ -68,6 +68,16 @@ func (r *DispositionRepo) HasApprovedConcession(ctx context.Context, lotID int64
 	return n > 0, err
 }
 
+// HasActionableConcession reports whether any reviewed concession exists for the lot.
+func (r *DispositionRepo) HasActionableConcession(ctx context.Context, lotID int64) (bool, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dispositions
+		 WHERE lot_id = ? AND type = 'concession' AND status IN ('approved', 'rejected')`,
+		lotID).Scan(&n)
+	return n > 0, err
+}
+
 func scanDisposition(row *sql.Row) (*domain.Disposition, error) {
 	var d domain.Disposition
 	var created, updated string

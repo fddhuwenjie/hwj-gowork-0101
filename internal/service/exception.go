@@ -144,7 +144,7 @@ func (s *ExceptionService) ExecuteDisposition(ctx context.Context, id, expectedV
 				return err
 			}
 		case "concession_accept":
-			has, err := dispRepo.HasApprovedConcession(ctx, d.LotID)
+			has, err := dispRepo.HasActionableConcession(ctx, d.LotID)
 			if err != nil {
 				return err
 			}
