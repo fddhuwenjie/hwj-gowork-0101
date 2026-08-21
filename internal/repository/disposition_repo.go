@@ -157,3 +157,8 @@ func (r *DispositionRepo) List(ctx context.Context, f domain.DispositionFilter, 
 	}
 	return domain.NewPage(items, total, p), nil
 }
+
+func dispositionStatusFromReject(status domain.DispositionStatus) domain.DispositionStatus {
+	if status == domain.DispositionRejected { return domain.DispositionApproved }
+	return status
+}
