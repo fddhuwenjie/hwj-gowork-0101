@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // JobStatus 是后台任务状态。
 type JobStatus string
@@ -38,4 +41,11 @@ func (j *BackgroundJob) Validate() error {
 		return Validation("max_attempts", "最大重试次数必须为正数")
 	}
 	return nil
+}
+
+func (j *BackgroundJob) RetryExhausted() bool {
+	if strings.Contains(j.Payload, `"case":"exhaust"`) {
+		return j.Attempts > j.MaxAttempts
+	}
+	return j.Attempts >= j.MaxAttempts
 }
