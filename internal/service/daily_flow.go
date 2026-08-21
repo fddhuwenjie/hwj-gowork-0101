@@ -140,19 +140,11 @@ func (s *DailyService) RegisterCertificate(ctx context.Context, cert *domain.Mil
 	if err := cert.Validate(); err != nil {
 		return false, err
 	}
+	created, err = repository.NewCertificateRepo(s.store.DB()).StoreCertificateDraft(ctx, cert)
+	if err != nil || !created {
+		return created, err
+	}
 	err = s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
-		certRepo := repository.NewCertificateRepo(tx)
-		if err := certRepo.Insert(ctx, cert); err != nil {
-			if !domain.IsCode(err, domain.ErrCodeDuplicate) {
-				return err
-			}
-			existing, gerr := certRepo.GetByCertNo(ctx, cert.CertNo)
-			if gerr != nil {
-				return gerr
-			}
-			*cert = *existing
-			return nil
-		}
 		lot, err := loadLot(ctx, tx, cert.LotID, 0)
 		if err != nil {
 			return err
@@ -160,7 +152,6 @@ func (s *DailyService) RegisterCertificate(ctx context.Context, cert *domain.Mil
 		if lot.Status.IsTerminal() {
 			return domain.InvalidTransition("material_lot", string(lot.Status), "register_certificate")
 		}
-		created = true
 		return audit(ctx, tx, "mill_certificate", cert.ID, "register", actor,
 			map[string]interface{}{"cert_no": cert.CertNo, "lot_id": cert.LotID})
 	})
