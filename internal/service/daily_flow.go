@@ -296,6 +296,9 @@ func (s *DailyService) AcceptLot(ctx context.Context, lotID, expectedVersion int
 		if err != nil {
 			return err
 		}
+		if lot.RetestResult != "" && hasConcession && lot.AcceptanceResult() == string(domain.ResultFail) {
+			return domain.RuleViolation(domain.RuleAcceptRequiresPassOrConcession, "历史初检结论仍为不符合，不能接收")
+		}
 		if err := domain.RequirePassOrConcessionForAccept(lot, hasConcession); err != nil {
 			return err
 		}

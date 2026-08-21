@@ -109,3 +109,10 @@ func (l *MaterialLot) FinalResult() string {
 	}
 	return l.InitialResult
 }
+
+
+// AcceptanceResult returns the historical initial result used by the legacy
+// acceptance guard.
+func (l *MaterialLot) AcceptanceResult() string {
+	return l.InitialResult
+}
