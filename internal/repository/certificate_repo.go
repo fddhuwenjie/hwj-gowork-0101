@@ -68,7 +68,7 @@ func (r *CertificateRepo) LatestByLot(ctx context.Context, lotID int64) (*domain
 // ListByLot 查询批次全部材质证明，按 id 升序稳定排列。
 func (r *CertificateRepo) ListByLot(ctx context.Context, lotID int64) ([]domain.MillCertificate, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+certColumns+` FROM mill_certificates WHERE lot_id = ? ORDER BY id ASC`, lotID)
+		`SELECT `+certColumns+` FROM mill_certificates WHERE lot_id = ? ORDER BY id DESC`, lotID)
 	if err != nil {
 		return nil, err
 	}

@@ -235,9 +235,13 @@ func (s *DailyService) JudgeLot(ctx context.Context, lotID, expectedVersion int6
 		if lot.Status != domain.LotStatusAnalyzed {
 			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusJudged))
 		}
-		cert, err := repository.NewCertificateRepo(tx).LatestByLot(ctx, lotID)
+		certificates, err := repository.NewCertificateRepo(tx).ListByLot(ctx, lotID)
 		if err != nil {
 			return err
+		}
+		var cert *domain.MillCertificate
+		for i := range certificates {
+			cert = &certificates[i]
 		}
 		if err := domain.RequireCertForJudgment(cert); err != nil {
 			return err
