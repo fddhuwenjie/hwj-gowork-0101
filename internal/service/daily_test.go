@@ -93,6 +93,70 @@ func TestDailyFlow_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestGetLotDetail_NoCrossBatchLeak 验证批次详情的报告严格归属当前批次：
+// 同一牌号的两批共享同一 active 规则版本，但各自的详情只能看到自己的光谱报告。
+// 回归串批问题：旧实现按牌号规则 ID 取报告，会把另一批的同牌号报告混入当前批次详情。
+func TestGetLotDetail_NoCrossBatchLeak(t *testing.T) {
+	env := newTestEnv(t)
+
+	// 批次 A：1 个初检样本，报告 R-A
+	lotA := env.mustRegisterLot(t, "L-A", "304")
+	samplesA := env.mustSampled(t, lotA.ID, "P-A", 1)
+	env.mustAnalyzed(t, lotA.ID, samplesA, "R-A", true)
+
+	// 批次 B：同牌号 304（复用同一 active 规则版本），1 个初检样本，报告 R-B
+	lotB := env.mustRegisterLot(t, "L-B", "304")
+	samplesB := env.mustSampled(t, lotB.ID, "P-B", 1)
+	env.mustAnalyzed(t, lotB.ID, samplesB, "R-B", true)
+
+	// 批次 A 详情只应含自己的报告
+	detailA, err := env.daily.GetLotDetail(env.ctx, lotA.ID)
+	if err != nil {
+		t.Fatalf("批次 A 详情失败: %v", err)
+	}
+	if len(detailA.Reports) != 1 {
+		t.Fatalf("批次 A 报告数 = %d, 期望 1（不应串入批次 B 的报告）: %+v", len(detailA.Reports), detailA.Reports)
+	}
+	if got := detailA.Reports[0].ReportNo; got != "R-A-1" {
+		t.Fatalf("批次 A 报告编号 = %s, 期望 R-A-1", got)
+	}
+	for _, r := range detailA.Reports {
+		if r.ReportNo == "R-B-1" {
+			t.Fatalf("批次 A 详情串入批次 B 的报告 R-B-1: %+v", detailA.Reports)
+		}
+	}
+
+	// 批次 B 详情同理，只含自己的报告
+	detailB, err := env.daily.GetLotDetail(env.ctx, lotB.ID)
+	if err != nil {
+		t.Fatalf("批次 B 详情失败: %v", err)
+	}
+	if len(detailB.Reports) != 1 {
+		t.Fatalf("批次 B 报告数 = %d, 期望 1: %+v", len(detailB.Reports), detailB.Reports)
+	}
+	if got := detailB.Reports[0].ReportNo; got != "R-B-1" {
+		t.Fatalf("批次 B 报告编号 = %s, 期望 R-B-1", got)
+	}
+
+	// 不同牌号的批次详情也应正常：批次 C 用牌号 316，规则与样本均独立。
+	env.mustActiveGradeRule(t, "316", 1)
+	lotC := env.mustRegisterLot(t, "L-C", "316")
+	samplesC := env.mustSampled(t, lotC.ID, "P-C", 2)
+	env.mustAnalyzed(t, lotC.ID, samplesC, "R-C", true)
+	detailC, err := env.daily.GetLotDetail(env.ctx, lotC.ID)
+	if err != nil {
+		t.Fatalf("批次 C 详情失败: %v", err)
+	}
+	if len(detailC.Reports) != 2 {
+		t.Fatalf("批次 C（牌号 316）报告数 = %d, 期望 2: %+v", len(detailC.Reports), detailC.Reports)
+	}
+	for _, r := range detailC.Reports {
+		if r.ReportNo == "R-A-1" || r.ReportNo == "R-B-1" {
+			t.Fatalf("批次 C 详情串入其他牌号的报告: %+v", detailC.Reports)
+		}
+	}
+}
+
 // TestRegisterLot_Idempotent 重复登记同 lot_no 返回 created=false 且数据一致。
 func TestRegisterLot_Idempotent(t *testing.T) {
 	env := newTestEnv(t)

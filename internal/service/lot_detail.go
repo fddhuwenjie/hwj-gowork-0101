@@ -52,14 +52,9 @@ func (s *DailyService) GetLotDetail(ctx context.Context, lotID int64) (*LotDetai
 		return nil, err
 	}
 	detail.Certificates = certs
-	rule, err := repository.NewGradeRuleRepo(db).GetActiveByGrade(ctx, lot.Grade)
-	if err != nil {
-		return nil, err
-	}
-	if err := domain.RequireActiveGradeRule(rule, lot.Grade); err != nil {
-		return nil, err
-	}
-	reports, err := repository.NewSpectrumRepo(db).ListByRule(ctx, rule.ID)
+	// 报告必须严格归属当前批次：经 samples->sampling_plans->lot_id 关联查询，
+	// 不可按牌号规则 ID 取（同牌号多批次共享同一 active 规则版本，按规则取会串批）。
+	reports, err := repository.NewSpectrumRepo(db).ListByLot(ctx, lotID)
 	if err != nil {
 		return nil, err
 	}
