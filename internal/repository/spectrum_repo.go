@@ -178,3 +178,34 @@ func (r *SpectrumRepo) ListBySampleKind(ctx context.Context, lotID int64, kind d
 	}
 	return items, rows.Err()
 }
+
+// ListInitialByHeat 查询同炉批号下全部初检光谱报告。
+func (r *SpectrumRepo) ListInitialByHeat(ctx context.Context, heatNo string) ([]domain.SpectrumReport, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT sr.id, sr.report_no, sr.sample_id, sr.rule_id, sr.readings, sr.violations,
+		        sr.conclusion, sr.analyzer, sr.created_at, sr.version
+		 FROM spectrum_reports sr
+		 JOIN samples s ON s.id = sr.sample_id
+		 JOIN sampling_plans sp ON sp.id = s.plan_id
+		 JOIN material_lots l ON l.id = sp.lot_id
+		 WHERE l.heat_no = ? AND s.kind = 'initial'
+		 ORDER BY sr.id ASC`, heatNo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SpectrumReport{}
+	for rows.Next() {
+		var rep domain.SpectrumReport
+		var readings, violations, created string
+		if err := rows.Scan(&rep.ID, &rep.ReportNo, &rep.SampleID, &rep.RuleID, &readings, &violations,
+			&rep.Conclusion, &rep.Analyzer, &created, &rep.Version); err != nil {
+			return nil, err
+		}
+		if err := fillSpectrumFields(&rep, readings, violations, created); err != nil {
+			return nil, err
+		}
+		items = append(items, rep)
+	}
+	return items, rows.Err()
+}
