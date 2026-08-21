@@ -363,6 +363,107 @@ func TestAcceptLot_R12(t *testing.T) {
 	}
 }
 
+// TestRegisterCertificate_RollbackOnTerminalLot 已接收（终态）批次补录证明应报状态冲突，
+// 且证明不得落库、审计不得写入——失败请求不留任何业务数据。
+func TestRegisterCertificate_RollbackOnTerminalLot(t *testing.T) {
+	env := newTestEnv(t)
+	lot, _, _ := env.mustJudgedLot(t, "L-TERMCERT", true)
+	if _, err := env.daily.AcceptLot(env.ctx, lot.ID, 0, "receiver"); err != nil {
+		t.Fatalf("接收批次失败: %v", err)
+	}
+
+	cert := &domain.MillCertificate{
+		CertNo: "C-TERMCERT", LotID: lot.ID, Grade: lot.Grade, HeatNo: lot.HeatNo,
+		IssuedAt: time.Now().UTC(),
+	}
+	created, err := env.daily.RegisterCertificate(env.ctx, cert, "warehouse")
+	if created {
+		t.Fatal("终态批次补录证明不应 created=true")
+	}
+	de := domain.AsDomain(err)
+	if de.Code != domain.ErrCodeInvalidTransition {
+		t.Fatalf("期望 invalid_transition, 实际 %v", err)
+	}
+
+	// 失败登记的证明不得落库（批次本身已有的证明不计）
+	got, gerr := repository.NewCertificateRepo(env.db).GetByCertNo(env.ctx, "C-TERMCERT")
+	if gerr != nil || got != nil {
+		t.Fatalf("失败登记不应留下证明: %+v %v", got, gerr)
+	}
+	// 审计不得写入
+	audits, _ := env.report.ListAuditEvents(env.ctx,
+		domain.AuditFilter{Entity: "mill_certificate", EntityID: cert.ID},
+		domain.PageRequest{Page: 1, PageSize: 10, Sort: "id", Order: "asc"})
+	if audits.Total != 0 {
+		t.Fatalf("失败登记不应留下审计事件: %d", audits.Total)
+	}
+}
+
+// TestRegisterCertificate_PersistsCertAndAudit 正常登记时证明与审计在同一事务落库。
+func TestRegisterCertificate_PersistsCertAndAudit(t *testing.T) {
+	env := newTestEnv(t)
+	lot := env.mustRegisterLot(t, "L-CERTAUDIT", "304")
+
+	cert := &domain.MillCertificate{
+		CertNo: "C-CERTAUDIT", LotID: lot.ID, Grade: lot.Grade, HeatNo: lot.HeatNo,
+		IssuedAt: time.Now().UTC(),
+	}
+	created, err := env.daily.RegisterCertificate(env.ctx, cert, "warehouse")
+	if err != nil || !created {
+		t.Fatalf("登记材质证明失败: created=%v err=%v", created, err)
+	}
+
+	certs, gerr := env.daily.ListCertificates(env.ctx, lot.ID)
+	if gerr != nil || len(certs) != 1 || certs[0].ID != cert.ID {
+		t.Fatalf("证明应已落库: %v %v", certs, gerr)
+	}
+	audits, _ := env.report.ListAuditEvents(env.ctx,
+		domain.AuditFilter{Entity: "mill_certificate", EntityID: cert.ID},
+		domain.PageRequest{Page: 1, PageSize: 10, Sort: "id", Order: "asc"})
+	if audits.Total != 1 || audits.Items[0].Action != "register" {
+		t.Fatalf("应写入一条 register 审计: %d %+v", audits.Total, audits.Items)
+	}
+}
+
+// TestRegisterCertificate_Idempotent 重复登记同 cert_no 返回 created=false 且数据一致。
+func TestRegisterCertificate_Idempotent(t *testing.T) {
+	env := newTestEnv(t)
+	lot := env.mustRegisterLot(t, "L-CERTIDEM", "304")
+	cert := &domain.MillCertificate{
+		CertNo: "C-IDEM", LotID: lot.ID, Grade: lot.Grade, HeatNo: lot.HeatNo,
+		IssuedAt: time.Now().UTC(),
+	}
+	if _, err := env.daily.RegisterCertificate(env.ctx, cert, "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	replay := &domain.MillCertificate{
+		CertNo: "C-IDEM", LotID: lot.ID, Grade: lot.Grade, HeatNo: lot.HeatNo,
+		IssuedAt: time.Now().UTC(),
+	}
+	created, err := env.daily.RegisterCertificate(env.ctx, replay, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("重复登记应 created=false")
+	}
+	if replay.ID != cert.ID || replay.CertNo != cert.CertNo {
+		t.Fatalf("幂等重放数据不一致: %+v vs %+v", replay, cert)
+	}
+	// 重放不应产生第二条证明或审计
+	certs, _ := env.daily.ListCertificates(env.ctx, lot.ID)
+	if len(certs) != 1 {
+		t.Fatalf("重放不应新增证明: %d", len(certs))
+	}
+	audits, _ := env.report.ListAuditEvents(env.ctx,
+		domain.AuditFilter{Entity: "mill_certificate", EntityID: cert.ID},
+		domain.PageRequest{Page: 1, PageSize: 10, Sort: "id", Order: "asc"})
+	if audits.Total != 1 {
+		t.Fatalf("重放不应新增审计: %d", audits.Total)
+	}
+}
+
 // TestAcceptLot_InvalidTransition 已接收批次（终态）重复接收走状态机校验。
 func TestAcceptLot_InvalidTransition(t *testing.T) {
 	env := newTestEnv(t)

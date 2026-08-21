@@ -46,25 +46,6 @@ func (r *CertificateRepo) Insert(ctx context.Context, c *domain.MillCertificate)
 	return err
 }
 
-// StoreCertificateDraft records a certificate before the caller validates the lot transition.
-func (r *CertificateRepo) StoreCertificateDraft(ctx context.Context, c *domain.MillCertificate) (bool, error) {
-	if err := r.Insert(ctx, c); err != nil {
-		if !domain.IsCode(err, domain.ErrCodeDuplicate) {
-			return false, err
-		}
-		existing, getErr := r.GetByCertNo(ctx, c.CertNo)
-		if getErr != nil {
-			return false, getErr
-		}
-		if existing == nil {
-			return false, err
-		}
-		*c = *existing
-		return false, nil
-	}
-	return true, nil
-}
-
 // GetByID 按主键查询材质证明。
 func (r *CertificateRepo) GetByID(ctx context.Context, id int64) (*domain.MillCertificate, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+certColumns+` FROM mill_certificates WHERE id = ?`, id)

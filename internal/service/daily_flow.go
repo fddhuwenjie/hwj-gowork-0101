@@ -135,16 +135,33 @@ func (s *DailyService) AnalyzeLot(ctx context.Context, lotID, expectedVersion in
 	return out, err
 }
 
-// RegisterCertificate 登记材质证明（事务：证明入库 + 审计）。以 cert_no 作为幂等键。
+// RegisterCertificate 登记材质证明（事务：证明入库 + 批次终态校验 + 审计，
+// 任一失败整体回滚）。以 cert_no 作为幂等键：重复提交返回既有证明与 created=false。
+//
+// 已接收（终态）的批次不允许补录证明，校验失败时证明不得落库、
+// 审计不得写入，二者必须同为单事务的原子结果。
 func (s *DailyService) RegisterCertificate(ctx context.Context, cert *domain.MillCertificate, actor string) (created bool, err error) {
 	if err := cert.Validate(); err != nil {
 		return false, err
 	}
-	created, err = repository.NewCertificateRepo(s.store.DB()).StoreCertificateDraft(ctx, cert)
-	if err != nil || !created {
-		return created, err
-	}
 	err = s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
+		certRepo := repository.NewCertificateRepo(tx)
+		// 幂等重放：同 cert_no 直接返回既有证明
+		if err := certRepo.Insert(ctx, cert); err != nil {
+			if !domain.IsCode(err, domain.ErrCodeDuplicate) {
+				return err
+			}
+			existing, gerr := certRepo.GetByCertNo(ctx, cert.CertNo)
+			if gerr != nil {
+				return gerr
+			}
+			if existing == nil {
+				return err
+			}
+			*cert = *existing
+			return nil
+		}
+		// 新增证明前校验批次非终态：失败则整体回滚，证明与审计一并作废
 		lot, err := loadLot(ctx, tx, cert.LotID, 0)
 		if err != nil {
 			return err
@@ -152,6 +169,7 @@ func (s *DailyService) RegisterCertificate(ctx context.Context, cert *domain.Mil
 		if lot.Status.IsTerminal() {
 			return domain.InvalidTransition("material_lot", string(lot.Status), "register_certificate")
 		}
+		created = true
 		return audit(ctx, tx, "mill_certificate", cert.ID, "register", actor,
 			map[string]interface{}{"cert_no": cert.CertNo, "lot_id": cert.LotID})
 	})
