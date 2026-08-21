@@ -27,11 +27,20 @@ func (s *ReviewService) RejectRetest(ctx context.Context, taskID, expectedVersio
 		if err != nil {
 			return err
 		}
-		if lot.Status == domain.LotStatusRetesting {
-			if err := transitionLot(ctx, tx, lot, domain.LotStatusJudged, approver, "reject_retest",
-				map[string]interface{}{"task_id": task.ID}, nil, nil, nil, nil); err != nil {
+		if lot.Status == domain.LotStatusRetesting || lot.Status == domain.LotStatusQuarantined {
+			ok, err := repository.NewLotRepo(tx).RestoreAfterRetestRejection(ctx, lot.ID, lot.Version)
+			if err != nil {
 				return err
 			}
+			if !ok {
+				return domain.VersionConflict("material_lot", lot.ID, lot.Version, -1)
+			}
+			if err := audit(ctx, tx, "material_lot", lot.ID, "reject_retest", approver,
+				map[string]interface{}{"task_id": task.ID}); err != nil {
+				return err
+			}
+			lot.Status = domain.LotStatusJudged
+			lot.Version++
 		}
 		ok, err := repository.NewRetestRepo(tx).UpdateStatus(ctx, taskID, task.Version,
 			domain.RetestStatusRejected, &approver)

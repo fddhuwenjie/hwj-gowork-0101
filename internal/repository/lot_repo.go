@@ -120,6 +120,19 @@ func (r *LotRepo) Transition(ctx context.Context, id int64, expectedVersion int6
 	return n > 0, err
 }
 
+// RestoreAfterRetestRejection 关闭复验申请时恢复批次的判定状态。
+func (r *LotRepo) RestoreAfterRetestRejection(ctx context.Context, id, expectedVersion int64) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE material_lots SET status = 'judged', updated_at = ?, version = version + 1
+		 WHERE id = ? AND version = ? AND status IN ('retesting', 'quarantined')`,
+		timeToDB(nowUTC()), id, expectedVersion)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // List 分页查询批次，支持状态/供方/牌号/批次号前缀/到货时间区间过滤与稳定排序。
 func (r *LotRepo) List(ctx context.Context, f domain.LotFilter, p domain.PageRequest) (domain.Page[domain.MaterialLot], error) {
 	where := []string{"1=1"}
