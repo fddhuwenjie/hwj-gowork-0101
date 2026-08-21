@@ -46,6 +46,9 @@ func (s *ReviewService) RequestRetest(ctx context.Context, task *domain.RetestTa
 		if err != nil {
 			return err
 		}
+		if domain.AllowsObjectionRetest(lot.Status) && task.Reason == "异议复验" {
+			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusRetesting))
+		}
 		if err := domain.RequireRetestAfterJudgment(lot); err != nil {
 			return err
 		}

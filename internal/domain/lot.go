@@ -109,3 +109,10 @@ func (l *MaterialLot) FinalResult() string {
 	}
 	return l.InitialResult
 }
+
+
+// AllowsObjectionRetest identifies a rejected lot that may still enter the
+// supplier objection workflow.
+func AllowsObjectionRetest(status LotStatus) bool {
+	return status == LotStatusRejected
+}
