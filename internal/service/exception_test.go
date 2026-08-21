@@ -153,3 +153,63 @@ func TestBatchAccept_PartialFailure(t *testing.T) {
 		t.Fatalf("超量应 validation, 实际 %v", err)
 	}
 }
+
+// TestConcession_RejectedDoesNotAuthorizeExecution 复现跨处置流程缺陷：
+// 一张让步接收单被明确驳回后，同一批次进入隔离并被批准，此时若对隔离单执行
+// concession_accept，被驳回的授权不得再使批次推进到 accepted。
+// 同时验证真正获批的让步单仍可正常执行接收。
+func TestConcession_RejectedDoesNotAuthorizeExecution(t *testing.T) {
+	env := newTestEnv(t)
+	failLot, _, _ := env.mustJudgedLot(t, "L-REJ-CONC", false)
+
+	// 1) 提出让步接收单，随后被明确驳回 —— 该授权自此失效。
+	disp := &domain.Disposition{LotID: failLot.ID, Type: domain.DispositionConcession, Reason: "让步一", ProposedBy: "tester"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, disp, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.exception.RejectDisposition(env.ctx, disp.ID, 0, "boss"); err != nil {
+		t.Fatalf("驳回让步单失败: %v", err)
+	}
+
+	// 2) 同一批次进入隔离（驳回后唯一索引允许新的未关闭处置单），隔离单获批。
+	q := &domain.Disposition{LotID: failLot.ID, Type: domain.DispositionQuarantine, Reason: "隔离处置", ProposedBy: "tester"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, q, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if env.getLot(t, failLot.ID).Status != domain.LotStatusQuarantined {
+		t.Fatal("提出隔离后批次应进入 quarantined")
+	}
+	q, err := env.exception.ApproveDisposition(env.ctx, q.ID, 0, "boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3) 对隔离单执行 concession_accept：被驳回的让步单不得再授权任何后续状态。
+	_, err = env.exception.ExecuteDisposition(env.ctx, q.ID, q.Version, "boss", "concession_accept")
+	if !domain.IsCode(err, domain.ErrCodeRuleViolation) || domain.AsDomain(err).Rule != domain.RuleAcceptRequiresPassOrConcession {
+		t.Fatalf("被驳回的让步单不应授权接收执行, 期望 R12 规则违反, 实际 err=%v", err)
+	}
+	if got := env.getLot(t, failLot.ID); got.Status != domain.LotStatusQuarantined {
+		t.Fatalf("批次不应被推进到 accepted, 仍应为 quarantined: %s", got.Status)
+	}
+
+	// 4) 真正获批的让步单仍能正常执行 —— 回归保护。
+	c := &domain.Disposition{LotID: failLot.ID, Type: domain.DispositionConcession, Reason: "让步二", ProposedBy: "tester"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	c, err = env.exception.ApproveDisposition(env.ctx, c.ID, 0, "boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := env.exception.ExecuteDisposition(env.ctx, c.ID, c.Version, "boss", "concession_accept")
+	if err != nil {
+		t.Fatalf("已批准的让步单应能正常执行接收: %v", err)
+	}
+	if d.Status != domain.DispositionExecuted || d.Resolution != "concession_accept" {
+		t.Fatalf("让步执行结果不符: %+v", d)
+	}
+	if got := env.getLot(t, failLot.ID); got.Status != domain.LotStatusAccepted {
+		t.Fatalf("已批准让步执行后应为 accepted: %s", got.Status)
+	}
+}

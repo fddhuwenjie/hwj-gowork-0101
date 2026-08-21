@@ -614,6 +614,54 @@ func TestDispositionRepo(t *testing.T) {
 	}
 }
 
+// TestDispositionRepo_RejectedConcessionNotActionable 验证被驳回的让步接收单
+// 不计入 HasActionableConcession：被驳回的授权已失效，不得再使后续处置执行
+// 把批次推进到 accepted。仅已批准的让步单才具有授权资格。
+func TestDispositionRepo_RejectedConcessionNotActionable(t *testing.T) {
+	db, ctx := openTestDB(t)
+	sup := mustSupplier(t, db, ctx, "S1")
+	lot := mustLot(t, db, ctx, "L-RJ", sup.ID, "304")
+	repo := NewDispositionRepo(db)
+	approver := "boss"
+
+	// 一张让步接收单被明确驳回。
+	rejected := &domain.Disposition{LotID: lot.ID, Type: domain.DispositionConcession, Reason: "让步一", ProposedBy: "tester"}
+	if err := repo.Insert(ctx, rejected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateStatus(ctx, rejected.ID, rejected.Version, domain.DispositionRejected, nil, &approver, nil); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := repo.HasActionableConcession(ctx, lot.ID); err != nil || has {
+		t.Fatalf("被驳回的让步单不应计入 actionable: has=%v err=%v", has, err)
+	}
+
+	// 驳回后允许同批次同类型再提一张未关闭单，将其批准。
+	approved := &domain.Disposition{LotID: lot.ID, Type: domain.DispositionConcession, Reason: "让步二", ProposedBy: "tester"}
+	if err := repo.Insert(ctx, approved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateStatus(ctx, approved.ID, approved.Version, domain.DispositionApproved, nil, &approver, nil); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := repo.HasActionableConcession(ctx, lot.ID); err != nil || !has {
+		t.Fatalf("存在已批准让步单时应计入 actionable: has=%v err=%v", has, err)
+	}
+
+	// 再将已批准让步单执行后，actionable 应回落为 false（执行后状态为 executed）。
+	approved, _ = repo.GetByID(ctx, approved.ID) // 重新加载以获取递增后的版本
+	resolution := "concession_accept"
+	executor := "boss"
+	ok, err := repo.UpdateStatus(ctx, approved.ID, approved.Version, domain.DispositionExecuted,
+		&resolution, nil, &executor)
+	if err != nil || !ok {
+		t.Fatalf("执行已批准让步单失败: ok=%v err=%v", ok, err)
+	}
+	if has, err := repo.HasActionableConcession(ctx, lot.ID); err != nil || has {
+		t.Fatalf("已执行的让步单不应再计入 actionable: has=%v err=%v", has, err)
+	}
+}
+
 func TestJobRepo(t *testing.T) {
 	db, ctx := openTestDB(t)
 	repo := NewJobRepo(db)
