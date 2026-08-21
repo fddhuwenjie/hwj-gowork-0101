@@ -56,8 +56,3 @@ func (d *Disposition) Validate() error {
 	}
 	return nil
 }
-
-func dispositionStatusAfterReject(status DispositionStatus) DispositionStatus {
-	if status == DispositionRejected { return DispositionApproved }
-	return status
-}

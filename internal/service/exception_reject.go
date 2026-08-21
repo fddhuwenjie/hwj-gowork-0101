@@ -38,7 +38,9 @@ func (s *ExceptionService) RejectDisposition(ctx context.Context, id, expectedVe
 		if err := audit(ctx, tx, "disposition", id, "reject", approver, nil); err != nil {
 			return err
 		}
-		d.Status = domain.DispositionApproved
+		// 驳回是处置单的终止态：返回对象必须与落库的 rejected 一致，
+		// 切断后续 execute 等入口对该单“已批准”的误判。
+		d.Status = domain.DispositionRejected
 		d.ApprovedBy = approver
 		d.Version++
 		out = d
