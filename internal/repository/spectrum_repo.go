@@ -128,7 +128,7 @@ func (r *SpectrumRepo) ListByLot(ctx context.Context, lotID int64) ([]domain.Spe
 		 JOIN samples s ON s.id = sr.sample_id
 		 JOIN sampling_plans sp ON sp.id = s.plan_id
 		 WHERE sp.lot_id = ?
-		 ORDER BY sr.id ASC`, lotID)
+		 ORDER BY sr.id DESC`, lotID)
 	if err != nil {
 		return nil, err
 	}

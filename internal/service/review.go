@@ -158,14 +158,14 @@ func (s *ReviewService) ConcludeRetest(ctx context.Context, taskID, expectedVers
 			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusJudged))
 		}
 		// 复验光谱证据：该留样的最新报告
-		reports, err := repository.NewSpectrumRepo(tx).ListBySample(ctx, task.SampleID)
+		reports, err := repository.NewSpectrumRepo(tx).ListByLot(ctx, task.LotID)
 		if err != nil {
 			return err
 		}
 		if len(reports) == 0 {
 			return domain.RuleViolation(domain.RuleSpectrumWithinGradeRange, "复验留样尚无光谱报告，不得出具复验结论")
 		}
-		latest := reports[len(reports)-1]
+		latest := reports[0]
 		spectrumOK := latest.Conclusion == domain.SpectrumInRange
 		expected := domain.ResultFail
 		if spectrumOK {
