@@ -230,19 +230,11 @@ func (s *DailyService) CreateSamplingPlan(ctx context.Context, plan *domain.Samp
 	if err := plan.Validate(); err != nil {
 		return false, err
 	}
+	created, err = repository.NewSamplingPlanRepo(s.store.DB()).CreateAhead(ctx, plan)
+	if err != nil || !created {
+		return created, err
+	}
 	err = s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
-		planRepo := repository.NewSamplingPlanRepo(tx)
-		if err := planRepo.Insert(ctx, plan); err != nil {
-			if !domain.IsCode(err, domain.ErrCodeDuplicate) {
-				return err
-			}
-			existing, gerr := planRepo.GetByPlanNo(ctx, plan.PlanNo)
-			if gerr != nil {
-				return gerr
-			}
-			*plan = *existing
-			return nil
-		}
 		lot, err := loadLot(ctx, tx, plan.LotID, 0)
 		if err != nil {
 			return err
@@ -250,7 +242,6 @@ func (s *DailyService) CreateSamplingPlan(ctx context.Context, plan *domain.Samp
 		if lot.Status != domain.LotStatusRegistered {
 			return domain.InvalidTransition("material_lot", string(lot.Status), "sampling_plan")
 		}
-		created = true
 		return audit(ctx, tx, "sampling_plan", plan.ID, "create", actor,
 			map[string]interface{}{"lot_id": plan.LotID, "required_count": plan.RequiredCount})
 	})

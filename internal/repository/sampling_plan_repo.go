@@ -43,6 +43,25 @@ func (r *SamplingPlanRepo) Insert(ctx context.Context, p *domain.SamplingPlan) e
 	return err
 }
 
+// CreateAhead inserts or resolves an idempotent sampling plan.
+func (r *SamplingPlanRepo) CreateAhead(ctx context.Context, p *domain.SamplingPlan) (bool, error) {
+	if err := r.Insert(ctx, p); err != nil {
+		if !domain.IsCode(err, domain.ErrCodeDuplicate) {
+			return false, err
+		}
+		existing, getErr := r.GetByPlanNo(ctx, p.PlanNo)
+		if getErr != nil {
+			return false, getErr
+		}
+		if existing == nil {
+			return false, err
+		}
+		*p = *existing
+		return false, nil
+	}
+	return true, nil
+}
+
 // GetByID 按主键查询取样计划。
 func (r *SamplingPlanRepo) GetByID(ctx context.Context, id int64) (*domain.SamplingPlan, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM sampling_plans WHERE id = ?`, id)
