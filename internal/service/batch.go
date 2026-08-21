@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"metalmics/internal/domain"
-	"metalmics/internal/repository"
 )
 
 // BatchAcceptItem 是批量接收的单项结果。
@@ -24,6 +23,9 @@ type BatchAcceptResult struct {
 
 // BatchAccept 批量接收确认：每个批次在独立事务中执行接收，
 // 单项失败不影响其他项（部分失败语义），结果按输入顺序返回。
+//
+// 让步资格按批次分别校验：仅当某批次自身存在已批准的让步接收单时，
+// 该批次的不符合结论才被允许接收；一个批次的让步资格不会串用给另一批次。
 func (s *DailyService) BatchAccept(ctx context.Context, lotIDs []int64, actor string) (*BatchAcceptResult, error) {
 	if len(lotIDs) == 0 {
 		return nil, domain.Validation("lot_ids", "批次列表不能为空")
@@ -32,12 +34,8 @@ func (s *DailyService) BatchAccept(ctx context.Context, lotIDs []int64, actor st
 		return nil, domain.Validation("lot_ids", "单次批量接收不能超过 100 个批次")
 	}
 	result := &BatchAcceptResult{Succeeded: []BatchAcceptItem{}, Failed: []BatchAcceptItem{}}
-	sharedConcession, err := repository.NewDispositionRepo(s.store.DB()).BatchConcessionState(ctx, lotIDs)
-	if err != nil {
-		return nil, err
-	}
 	for _, id := range lotIDs {
-		lot, err := s.acceptBatchItem(ctx, id, actor, sharedConcession)
+		lot, err := s.acceptBatchItem(ctx, id, actor)
 		if err != nil {
 			item := BatchAcceptItem{LotID: id, OK: false, Error: err.Error()}
 			if de, ok := err.(*domain.Error); ok {

@@ -153,3 +153,44 @@ func TestBatchAccept_PartialFailure(t *testing.T) {
 		t.Fatalf("超量应 validation, 实际 %v", err)
 	}
 }
+
+// TestBatchAccept_ConcessionNotShared 资格不串用：
+// 同一批量接收中，failA 已有已批准让步可接收，failB 无让步，
+// failB 不得借用 failA 的资格，必须按 R12 失败。
+func TestBatchAccept_ConcessionNotShared(t *testing.T) {
+	env := newTestEnv(t)
+	failA, _, _ := env.mustJudgedLot(t, "L-CNA", false)
+	failB, _, _ := env.mustJudgedLot(t, "L-CNB", false)
+
+	// 仅 failA 提出并批准让步接收
+	d := &domain.Disposition{LotID: failA.ID, Type: domain.DispositionConcession, Reason: "客户让步", ProposedBy: "tester"}
+	if _, err := env.exception.ProposeDisposition(env.ctx, d, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.exception.ApproveDisposition(env.ctx, d.ID, 0, "boss"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := env.daily.BatchAccept(env.ctx, []int64{failA.ID, failB.ID}, "receiver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Succeeded) != 1 || len(result.Failed) != 1 {
+		t.Fatalf("批量接收结果不符: %+v", result)
+	}
+	if result.Succeeded[0].LotID != failA.ID {
+		t.Fatalf("failA 应凭自身让步接收成功: %+v", result.Succeeded)
+	}
+	if result.Failed[0].LotID != failB.ID || result.Failed[0].Code != string(domain.ErrCodeRuleViolation) {
+		t.Fatalf("failB 应因无让步资格按 R12 失败: %+v", result.Failed[0])
+	}
+	// failB 仍未被接收
+	if lot := env.getLot(t, failB.ID); lot.Status == domain.LotStatusAccepted {
+		t.Fatalf("failB 不应被接收: %+v", lot)
+	}
+
+	// failB 单独接收同样失败，与批量流程一致（语义对称）
+	if _, err := env.daily.AcceptLot(env.ctx, failB.ID, 0, "receiver"); !domain.IsCode(err, domain.ErrCodeRuleViolation) {
+		t.Fatalf("failB 单独接收也应 R12 失败, 实际 %v", err)
+	}
+}

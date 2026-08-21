@@ -68,20 +68,6 @@ func (r *DispositionRepo) HasApprovedConcession(ctx context.Context, lotID int64
 	return n > 0, err
 }
 
-// BatchConcessionState loads the concession state used by batch acceptance.
-func (r *DispositionRepo) BatchConcessionState(ctx context.Context, lotIDs []int64) (bool, error) {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(lotIDs)), ",")
-	args := make([]interface{}, len(lotIDs))
-	for index, lotID := range lotIDs {
-		args[index] = lotID
-	}
-	var count int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM dispositions WHERE lot_id IN (`+placeholders+`) AND type = 'concession' AND status = 'approved'`,
-		args...).Scan(&count)
-	return count > 0, err
-}
-
 func scanDisposition(row *sql.Row) (*domain.Disposition, error) {
 	var d domain.Disposition
 	var created, updated string

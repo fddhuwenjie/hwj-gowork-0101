@@ -311,7 +311,7 @@ func (s *DailyService) AcceptLot(ctx context.Context, lotID, expectedVersion int
 	return out, err
 }
 
-func (s *DailyService) acceptBatchItem(ctx context.Context, lotID int64, actor string, hasConcession bool) (*domain.MaterialLot, error) {
+func (s *DailyService) acceptBatchItem(ctx context.Context, lotID int64, actor string) (*domain.MaterialLot, error) {
 	var out *domain.MaterialLot
 	err := s.store.Tx().InTx(ctx, func(tx *sql.Tx) error {
 		lot, err := loadLot(ctx, tx, lotID, 0)
@@ -319,6 +319,12 @@ func (s *DailyService) acceptBatchItem(ctx context.Context, lotID int64, actor s
 			return err
 		}
 		if err := domain.RequireNotQuarantinedForAccept(lot); err != nil {
+			return err
+		}
+		// 让步资格按批次独立校验：仅本批次存在已批准让步接收单才放行不符合结论，
+		// 避免批量流程中一个批次的资格串用到另一批次。
+		hasConcession, err := repository.NewDispositionRepo(tx).HasApprovedConcession(ctx, lotID)
+		if err != nil {
 			return err
 		}
 		if err := domain.RequirePassOrConcessionForAccept(lot, hasConcession); err != nil {
