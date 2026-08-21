@@ -221,6 +221,58 @@ func TestAnalyzeLot_RequiresAllReports(t *testing.T) {
 	}
 }
 
+// TestAnalyzeLot_SharedHeatNo 共用炉批号的两批各自取样分析互不干扰。
+// 回归：AnalyzeLot 曾按炉批号聚合初检光谱报告，同炉批号的另一批报告被
+// 计入本批数量校验，提示“报告数量不完整”。每批应只消费自己的样本与报告。
+func TestAnalyzeLot_SharedHeatNo(t *testing.T) {
+	env := newTestEnv(t)
+
+	// 两批来料共用同一炉批号 H-SHARED，各自取样 1 个样本并提交光谱报告。
+	lotA := &domain.MaterialLot{
+		LotNo: "L-SHARE-A", SupplierID: env.supplier.ID, HeatNo: "H-SHARED", Grade: "304",
+		Quantity: 10, ReceivedAt: time.Now().UTC(),
+	}
+	if created, err := env.daily.RegisterLot(env.ctx, lotA, "tester"); err != nil || !created {
+		t.Fatalf("登记批次A失败: created=%v err=%v", created, err)
+	}
+	lotB := &domain.MaterialLot{
+		LotNo: "L-SHARE-B", SupplierID: env.supplier.ID, HeatNo: "H-SHARED", Grade: "304",
+		Quantity: 10, ReceivedAt: time.Now().UTC(),
+	}
+	if created, err := env.daily.RegisterLot(env.ctx, lotB, "tester"); err != nil || !created {
+		t.Fatalf("登记批次B失败: created=%v err=%v", created, err)
+	}
+
+	samplesA := env.mustSampled(t, lotA.ID, "P-SHARE-A", 1)
+	samplesB := env.mustSampled(t, lotB.ID, "P-SHARE-B", 1)
+
+	repA := &domain.SpectrumReport{ReportNo: "R-SHARE-A-1", SampleID: samplesA[0].ID, Readings: inRangeReadings(), Analyzer: "tester"}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, repA, "tester"); err != nil {
+		t.Fatalf("提交批次A光谱失败: %v", err)
+	}
+	repB := &domain.SpectrumReport{ReportNo: "R-SHARE-B-1", SampleID: samplesB[0].ID, Readings: inRangeReadings(), Analyzer: "tester"}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, repB, "tester"); err != nil {
+		t.Fatalf("提交批次B光谱失败: %v", err)
+	}
+
+	// 各自完成分析：只消费本批的报告，不受同炉批号另一批干扰。
+	if _, err := env.daily.AnalyzeLot(env.ctx, lotA.ID, 0, "tester"); err != nil {
+		t.Fatalf("批次A完成分析失败（同炉批号跨批干扰）: %v", err)
+	}
+	if _, err := env.daily.AnalyzeLot(env.ctx, lotB.ID, 0, "tester"); err != nil {
+		t.Fatalf("批次B完成分析失败（同炉批号跨批干扰）: %v", err)
+	}
+
+	lotA = env.getLot(t, lotA.ID)
+	lotB = env.getLot(t, lotB.ID)
+	if lotA.Status != domain.LotStatusAnalyzed {
+		t.Fatalf("批次A应为 analyzed: %s", lotA.Status)
+	}
+	if lotB.Status != domain.LotStatusAnalyzed {
+		t.Fatalf("批次B应为 analyzed: %s", lotB.Status)
+	}
+}
+
 // TestSubmitSpectrumReport_Idempotent 同报告编号重复提交返回 created=false。
 func TestSubmitSpectrumReport_Idempotent(t *testing.T) {
 	env := newTestEnv(t)

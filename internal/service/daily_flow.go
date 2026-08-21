@@ -113,7 +113,7 @@ func (s *DailyService) AnalyzeLot(ctx context.Context, lotID, expectedVersion in
 		if lot.Status != domain.LotStatusSampled {
 			return domain.InvalidTransition("material_lot", string(lot.Status), string(domain.LotStatusAnalyzed))
 		}
-		reports, err := repository.NewSpectrumRepo(tx).ListInitialByHeat(ctx, lot.HeatNo)
+		reports, err := repository.NewSpectrumRepo(tx).ListBySampleKind(ctx, lotID, domain.SampleKindInitial)
 		if err != nil {
 			return err
 		}
