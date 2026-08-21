@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"metalmics/internal/domain"
 )
@@ -206,3 +207,84 @@ func TestRejectRetest(t *testing.T) {
 		t.Fatalf("驳回后批次应回到 judged: %+v", lot)
 	}
 }
+
+// TestRetestAccepted_FollowsLatestCert 复验接收后补录新材质证明，
+// 派生查询应跟随最后一次登记的证明编号，而非最早登记的旧证明。
+// 回归用户反馈：审核人员在报表中看到的是旧证明编号。
+func TestRetestAccepted_FollowsLatestCert(t *testing.T) {
+	env := newTestEnv(t)
+	lot, samples, _ := env.mustJudgedLot(t, "L-RTC", false)
+	retained := samples[0]
+
+	task := &domain.RetestTask{LotID: lot.ID, SampleID: retained.ID, Reason: "供方异议", RequestedBy: "requester"}
+	if _, err := env.review.RequestRetest(env.ctx, task, "requester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.review.ApproveRetest(env.ctx, task.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+	rep := &domain.SpectrumReport{
+		ReportNo: "R-RTC-RETEST", SampleID: retained.ID,
+		Readings: inRangeReadings(), Analyzer: "tester2",
+	}
+	if _, err := env.daily.SubmitSpectrumReport(env.ctx, rep, "tester2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.review.ConcludeRetest(env.ctx, task.ID, 0, domain.ResultPass, "judge2", "co-judge", "共同决定覆盖"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.daily.AcceptLot(env.ctx, lot.ID, 0, "receiver"); err != nil {
+		t.Fatalf("接收失败: %v", err)
+	}
+
+	// 接收后补录新材质证明（接收为终态，证明登记应在接收之前完成；
+	// 为复现“补录”语义，在接收前的 judged 状态下补录第二条证明）。
+	// 这里重新走一遍流程并在接收前补录，确保报表跟随新证明。
+	env2 := newTestEnv(t)
+	lot2, samples2, _ := env2.mustJudgedLot(t, "L-RTC2", false)
+	retained2 := samples2[0]
+	task2 := &domain.RetestTask{LotID: lot2.ID, SampleID: retained2.ID, Reason: "异议", RequestedBy: "requester"}
+	if _, err := env2.review.RequestRetest(env.ctx, task2, "requester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env2.review.ApproveRetest(env.ctx, task2.ID, 0, "approver"); err != nil {
+		t.Fatal(err)
+	}
+	rep2 := &domain.SpectrumReport{
+		ReportNo: "R-RTC2-RETEST", SampleID: retained2.ID,
+		Readings: inRangeReadings(), Analyzer: "tester2",
+	}
+	if _, err := env2.daily.SubmitSpectrumReport(env.ctx, rep2, "tester2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env2.review.ConcludeRetest(env.ctx, task2.ID, 0, domain.ResultPass, "judge2", "co-judge", "覆盖"); err != nil {
+		t.Fatal(err)
+	}
+	// 补录新证明：在接收前（judged 状态，非终态）登记并核对第二条证明。
+	newCert := &domain.MillCertificate{
+		CertNo: "C-RTC2-NEW", LotID: lot2.ID, Grade: lot2.Grade, HeatNo: lot2.HeatNo,
+		IssuedAt: time.Now().UTC(),
+	}
+	if _, err := env2.daily.RegisterCertificate(env.ctx, newCert, "tester"); err != nil {
+		t.Fatalf("补录新证明登记失败: %v", err)
+	}
+	if _, err := env2.daily.VerifyCertificate(env.ctx, newCert.ID, 0, "tester"); err != nil {
+		t.Fatalf("补录新证明核对失败: %v", err)
+	}
+	if _, err := env2.daily.AcceptLot(env.ctx, lot2.ID, 0, "receiver"); err != nil {
+		t.Fatalf("接收失败: %v", err)
+	}
+
+	page, err := env2.report.ListRetestAccepted(env.ctx, domain.PageRequest{Page: 1, PageSize: 10, Sort: "id", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("ListRetestAccepted 应有 1 行: %+v", page)
+	}
+	row := page.Items[0]
+	if row.CertNo != "C-RTC2-NEW" {
+		t.Fatalf("报表应跟随最后一次登记的新证明编号 C-RTC2-NEW, 实际 %s", row.CertNo)
+	}
+}
+

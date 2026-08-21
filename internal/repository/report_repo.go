@@ -21,6 +21,8 @@ func NewReportRepo(db DBTX) *ReportRepo {
 // 返回批次号与材质证明编号，按批次 id 升序稳定排列。
 //
 // 条件：批次状态为 accepted，存在 fail 的初检结论，存在 pass 的复验结论。
+// 材质证明编号取该批次最后一次登记的证明（id 最大者），与判定流程 LatestByLot 口径一致，
+// 因此复验接收后补录新证明时，报表跟随最新证明编号。
 func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageRequest) (domain.Page[domain.RetestAcceptedRow], error) {
 	base := `
 		FROM material_lots l
@@ -28,7 +30,7 @@ func (r *ReportRepo) ListRetestAccepted(ctx context.Context, p domain.PageReques
 		JOIN conformity_conclusions ci ON ci.lot_id = l.id AND ci.round = 'initial' AND ci.result = 'fail'
 		JOIN conformity_conclusions cr ON cr.lot_id = l.id AND cr.round = 'retest' AND cr.result = 'pass'
 		LEFT JOIN mill_certificates mc ON mc.id = (
-			SELECT MIN(id) FROM mill_certificates WHERE lot_id = l.id
+			SELECT MAX(id) FROM mill_certificates WHERE lot_id = l.id
 		)
 		WHERE l.status = 'accepted'`
 	var total int64

@@ -113,7 +113,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/v1/reports/retest-accepted` | 初检不符合但复验仍接收的批次与材质证明编号（分页，按批次 id 升序） |
+| GET | `/api/v1/reports/retest-accepted` | 初检不符合但复验仍接收的批次与最后一次登记的材质证明编号（分页，按批次 id 升序） |
 | GET | `/api/v1/reports/cert-missing-accepted?days=30` | 各供方近期证明缺失而先接收的批次数量（数量降序、编码升序） |
 
 ### 审计与后台任务
