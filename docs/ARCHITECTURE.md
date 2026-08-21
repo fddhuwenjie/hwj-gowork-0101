@@ -79,9 +79,11 @@ R10 让步接收仅对不符合批次；R11 隔离批次不得直接接收；R12
 
 ## 后台任务
 
-`cert_missing_scan` 任务落库后由调度器周期领取；失败按 2^n 秒退避重试，耗尽进入
-failed，可经 `POST /api/v1/jobs/{id}/retry` 人工重置；进程重启时将遗留 running
-任务重新排队（重启恢复）。
+`cert_missing_scan` 任务落库后由调度器周期领取；可重试（瞬时）失败按 2^n 秒退避重试，
+达到 max_attempts 后进入 failed 终态并保留最后一次错误；不可恢复错误（未知任务类型、
+参数无法解析等重试也注定失败的情形）首次执行即进入 failed 终态，不再退避重试，避免
+任务反复退回 pending 被下一轮重复执行。failed 任务可经 `POST /api/v1/jobs/{id}/retry`
+人工重置为 pending；进程重启时将遗留 running 任务重新排队（重启恢复）。
 
 ## 派生查询与稳定排序
 

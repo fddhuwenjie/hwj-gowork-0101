@@ -19,6 +19,8 @@ const JobTypeCertMissingScan = "cert_missing_scan"
 type JobService struct {
 	store *Store
 	now   func() time.Time
+	// exec 可注入任务执行器；生产路径为 nil 时按 execute 的类型分派。
+	exec func(ctx context.Context, job *domain.BackgroundJob) error
 }
 
 // NewJobService 构造后台任务服务。
@@ -84,6 +86,8 @@ func (s *JobService) RecoverOnStartup(ctx context.Context) (int64, error) {
 
 // RunDue 领取并执行一个到期任务，返回是否执行了任务。
 // 执行失败时按指数退避安排重试，重试耗尽后进入 failed 终态。
+// 不可恢复错误（PermanentError，如未知任务类型、参数无法解析）不退避重试，
+// 首次执行即落 failed 终态并保留 last_error。
 func (s *JobService) RunDue(ctx context.Context) (bool, error) {
 	repo := repository.NewJobRepo(s.store.DB())
 	job, err := repo.PickDue(ctx, s.now())
@@ -94,12 +98,18 @@ func (s *JobService) RunDue(ctx context.Context) (bool, error) {
 	if execErr == nil {
 		return true, repo.MarkDone(ctx, job.ID)
 	}
-	exhausted := job.RetryExhausted()
-	backoff := time.Duration(1<<uint(job.Attempts-1)) * time.Second
-	if backoff > time.Hour {
-		backoff = time.Hour
+	// 不可恢复错误（如未知任务类型、参数无法解析）注定不会因重试而成功：
+	// 立即进入 failed 终态并保留 last_error，不再退避重试，避免任务反复
+	// 退回 pending 被下一轮重复执行。
+	exhausted := domain.IsPermanent(execErr) || job.RetryExhausted()
+	var next time.Time
+	if !exhausted {
+		backoff := time.Duration(1<<uint(job.Attempts-1)) * time.Second
+		if backoff > time.Hour {
+			backoff = time.Hour
+		}
+		next = s.now().Add(backoff)
 	}
-	next := s.now().Add(backoff)
 	if err := repo.MarkRetry(ctx, job.ID, execErr.Error(), next, exhausted); err != nil {
 		return true, err
 	}
@@ -107,12 +117,16 @@ func (s *JobService) RunDue(ctx context.Context) (bool, error) {
 }
 
 // execute 按任务类型分派执行。
+// 未知任务类型属于不可恢复错误，调度器收到后会立即落 failed 终态。
 func (s *JobService) execute(ctx context.Context, job *domain.BackgroundJob) error {
+	if s.exec != nil {
+		return s.exec(ctx, job)
+	}
 	switch job.Type {
 	case JobTypeCertMissingScan:
 		return s.runCertMissingScan(ctx, job)
 	default:
-		return fmt.Errorf("未知任务类型: %s", job.Type)
+		return domain.NewPermanentError(fmt.Errorf("未知任务类型: %s", job.Type))
 	}
 }
 
@@ -126,10 +140,11 @@ type certMissingScanPayload struct {
 func (s *JobService) runCertMissingScan(ctx context.Context, job *domain.BackgroundJob) error {
 	var payload certMissingScanPayload
 	if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
-		return fmt.Errorf("任务参数解析失败: %w", err)
+		// payload 已落库不会因重试而改变，解析失败属于不可恢复错误。
+		return domain.NewPermanentError(fmt.Errorf("任务参数解析失败: %w", err))
 	}
 	if payload.Days <= 0 || payload.Days > 365 {
-		return fmt.Errorf("任务参数 days 须在 1-365 之间: %d", payload.Days)
+		return domain.NewPermanentError(fmt.Errorf("任务参数 days 须在 1-365 之间: %d", payload.Days))
 	}
 	since := s.now().Add(-time.Duration(payload.Days) * 24 * time.Hour)
 	ids, err := repository.NewReportRepo(s.store.DB()).ListAcceptedWithoutCert(ctx, since)

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -61,8 +63,9 @@ func TestJob_CertMissingScan_Success(t *testing.T) {
 	}
 }
 
-// TestJob_InvalidPayload_RetryExhaustion 非法 payload 重试耗尽后 failed，人工重试重置 pending。
-func TestJob_InvalidPayload_RetryExhaustion(t *testing.T) {
+// TestJob_InvalidPayload_PermanentFailure 非法 payload（重试也不会改变）属不可恢复错误，
+// 首次执行即进入 failed 终态并保留 last_error，不再退避重试。
+func TestJob_InvalidPayload_PermanentFailure(t *testing.T) {
 	env := newTestEnv(t)
 	repo := repository.NewJobRepo(env.db)
 
@@ -71,36 +74,29 @@ func TestJob_InvalidPayload_RetryExhaustion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 第一次执行失败：attempts=1 < 2，安排重试
+	// 首次执行即失败并落终态：不可恢复错误不应再退避重试
 	ran, err := env.jobs.RunDue(env.ctx)
 	if err != nil || !ran {
 		t.Fatalf("RunDue: ran=%v err=%v", ran, err)
 	}
 	got, _ := repo.GetByID(env.ctx, job.ID)
-	if got.Status != domain.JobStatusPending || got.Attempts != 1 || got.LastError == "" {
-		t.Fatalf("首次失败后状态不符: %+v", got)
+	if got.Status != domain.JobStatusFailed || got.Attempts != 1 || got.LastError == "" {
+		t.Fatalf("不可恢复错误应首次即 failed 并保留错误: %+v", got)
 	}
 
-	// 将下次执行时间提前到过去，模拟退避到期
+	// 将下次执行时间提前到过去，确认调度器不再重复执行
 	past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	if _, err := env.db.ExecContext(env.ctx, `UPDATE background_jobs SET run_at = ? WHERE id = ?`, past, job.ID); err != nil {
 		t.Fatal(err)
 	}
-
-	// 第二次执行失败：attempts=2 耗尽 -> failed
-	ran, err = env.jobs.RunDue(env.ctx)
-	if err != nil || !ran {
-		t.Fatalf("RunDue: ran=%v err=%v", ran, err)
-	}
-	got, _ = repo.GetByID(env.ctx, job.ID)
-	if got.Status != domain.JobStatusFailed || got.Attempts != 2 {
-		t.Fatalf("耗尽后应为 failed: %+v", got)
-	}
-
-	// failed 任务不再被领取
 	ran, err = env.jobs.RunDue(env.ctx)
 	if err != nil || ran {
 		t.Fatalf("failed 任务不应再执行: ran=%v err=%v", ran, err)
+	}
+	// 重复执行没有累加 attempts
+	got, _ = repo.GetByID(env.ctx, job.ID)
+	if got.Attempts != 1 {
+		t.Fatalf("不应重复执行累加计数: attempts=%d", got.Attempts)
 	}
 
 	// 人工重试：重置 pending、清零计数
@@ -118,10 +114,61 @@ func TestJob_InvalidPayload_RetryExhaustion(t *testing.T) {
 	}
 }
 
-// TestJob_UnknownType 未知任务类型执行失败。
+// TestJob_RetriableError_Exhaustion 可重试（瞬时）错误重试耗尽后进入 failed 终态，
+// 并保留最后一次错误。覆盖 attempts == max_attempts 必须落终态的修复。
+func TestJob_RetriableError_Exhaustion(t *testing.T) {
+	env := newTestEnv(t)
+	repo := repository.NewJobRepo(env.db)
+	// 注入一个可控的瞬时失败执行器，独立于真实任务类型分派。
+	const failType = "transient_fail"
+	svc := &JobService{store: env.store, now: env.jobs.now, exec: func(_ context.Context, _ *domain.BackgroundJob) error {
+		return fmt.Errorf("瞬时故障 boom")
+	}}
+
+	job, err := svc.Enqueue(env.ctx, failType, map[string]interface{}{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 第一次执行失败：attempts=1 < 2，安排重试
+	ran, err := svc.RunDue(env.ctx)
+	if err != nil || !ran {
+		t.Fatalf("RunDue: ran=%v err=%v", ran, err)
+	}
+	got, _ := repo.GetByID(env.ctx, job.ID)
+	if got.Status != domain.JobStatusPending || got.Attempts != 1 || got.LastError == "" {
+		t.Fatalf("首次失败后应安排重试: %+v", got)
+	}
+
+	// 将下次执行时间提前到过去，模拟退避到期
+	past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := env.db.ExecContext(env.ctx, `UPDATE background_jobs SET run_at = ? WHERE id = ?`, past, job.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 第二次执行失败：attempts == max_attempts 耗尽 -> failed 终态并保留最后一次错误
+	ran, err = svc.RunDue(env.ctx)
+	if err != nil || !ran {
+		t.Fatalf("RunDue: ran=%v err=%v", ran, err)
+	}
+	got, _ = repo.GetByID(env.ctx, job.ID)
+	if got.Status != domain.JobStatusFailed || got.Attempts != 2 || got.LastError == "" {
+		t.Fatalf("耗尽后应为 failed 并保留错误: %+v", got)
+	}
+
+	// failed 任务不再被领取
+	ran, err = svc.RunDue(env.ctx)
+	if err != nil || ran {
+		t.Fatalf("failed 任务不应再执行: ran=%v err=%v", ran, err)
+	}
+}
+
+// TestJob_UnknownType 未知任务类型属不可恢复错误：即便配置了较大的 max_attempts，
+// 首次执行即进入 failed 终态并保留错误，不再退避重试。
 func TestJob_UnknownType(t *testing.T) {
 	env := newTestEnv(t)
-	job, err := env.jobs.Enqueue(env.ctx, "unknown_type", map[string]interface{}{}, 1)
+	repo := repository.NewJobRepo(env.db)
+	job, err := env.jobs.Enqueue(env.ctx, "unknown_type", map[string]interface{}{}, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,9 +176,20 @@ func TestJob_UnknownType(t *testing.T) {
 	if err != nil || !ran {
 		t.Fatalf("RunDue: ran=%v err=%v", ran, err)
 	}
-	got, _ := repository.NewJobRepo(env.db).GetByID(env.ctx, job.ID)
-	if got.Status != domain.JobStatusFailed || got.LastError == "" {
-		t.Fatalf("未知类型应失败: %+v", got)
+	got, _ := repo.GetByID(env.ctx, job.ID)
+	// 首次执行（attempts=1）即落终态，不会重试到 max_attempts=3
+	if got.Status != domain.JobStatusFailed || got.Attempts != 1 || got.LastError == "" {
+		t.Fatalf("未知类型应首次即 failed: %+v", got)
+	}
+
+	// 将下次执行时间提前到过去，确认不会重复执行
+	past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := env.db.ExecContext(env.ctx, `UPDATE background_jobs SET run_at = ? WHERE id = ?`, past, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	ran, err = env.jobs.RunDue(env.ctx)
+	if err != nil || ran {
+		t.Fatalf("不可恢复任务不应再执行: ran=%v err=%v", ran, err)
 	}
 }
 
