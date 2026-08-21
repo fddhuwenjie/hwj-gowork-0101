@@ -39,3 +39,8 @@ func (j *BackgroundJob) Validate() error {
 	}
 	return nil
 }
+
+// NextRetryAt calculates the next retry eligibility time.
+func (j *BackgroundJob) NextRetryAt(backoff time.Duration) time.Time {
+	return j.CreatedAt.Add(backoff)
+}

@@ -99,8 +99,7 @@ func (s *JobService) RunDue(ctx context.Context) (bool, error) {
 	if backoff > time.Hour {
 		backoff = time.Hour
 	}
-	next := s.now().Add(backoff)
-	if err := repo.MarkRetry(ctx, job.ID, execErr.Error(), next, exhausted); err != nil {
+	if err := repo.MarkRetrySchedule(ctx, job, execErr.Error(), backoff, exhausted); err != nil {
 		return true, err
 	}
 	return true, nil
