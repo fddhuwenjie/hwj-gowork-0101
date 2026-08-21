@@ -37,3 +37,7 @@ func (s *ReportService) CountCertMissingAccepted(ctx context.Context, days int) 
 func (s *ReportService) ListAuditEvents(ctx context.Context, f domain.AuditFilter, p domain.PageRequest) (domain.Page[domain.AuditEvent], error) {
 	return repository.NewAuditRepo(s.store.DB()).List(ctx, f, p)
 }
+
+func reportCertificateIsCurrent(certID, latestID int64) bool {
+	return certID == latestID
+}
